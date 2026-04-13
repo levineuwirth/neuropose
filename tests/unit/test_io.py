@@ -14,6 +14,7 @@ from neuropose.io import (
     JobResults,
     JobStatus,
     StatusFile,
+    VideoMetadata,
     VideoPredictions,
     load_job_results,
     load_status,
@@ -40,10 +41,18 @@ def one_frame() -> dict:
 
 
 @pytest.fixture
-def video_payload(one_frame: dict) -> dict:
+def video_metadata_payload() -> dict:
+    return {"frame_count": 2, "fps": 30.0, "width": 640, "height": 480}
+
+
+@pytest.fixture
+def video_predictions_payload(one_frame: dict, video_metadata_payload: dict) -> dict:
     return {
-        "frame_0000.png": one_frame,
-        "frame_0001.png": one_frame,
+        "metadata": video_metadata_payload,
+        "frames": {
+            "frame_000000": one_frame,
+            "frame_000001": one_frame,
+        },
     }
 
 
@@ -71,29 +80,89 @@ class TestFramePrediction:
 
 
 # ---------------------------------------------------------------------------
+# VideoMetadata
+# ---------------------------------------------------------------------------
+
+
+class TestVideoMetadata:
+    def test_valid(self) -> None:
+        meta = VideoMetadata(frame_count=10, fps=29.97, width=1920, height=1080)
+        assert meta.frame_count == 10
+        assert meta.fps == pytest.approx(29.97)
+
+    def test_zero_frame_count_allowed(self) -> None:
+        # Broken or empty videos still produce a valid metadata object so
+        # the caller can see frame_count == 0 rather than receiving an
+        # exception.
+        VideoMetadata(frame_count=0, fps=0.0, width=0, height=0)
+
+    def test_rejects_negative(self) -> None:
+        with pytest.raises(ValidationError):
+            VideoMetadata(frame_count=-1, fps=30.0, width=640, height=480)
+
+    def test_rejects_extra_fields(self) -> None:
+        with pytest.raises(ValidationError):
+            VideoMetadata(
+                frame_count=1,
+                fps=30.0,
+                width=640,
+                height=480,
+                source_path="/leak/me",
+            )
+
+    def test_is_frozen(self) -> None:
+        meta = VideoMetadata(frame_count=10, fps=30.0, width=640, height=480)
+        with pytest.raises(ValidationError):
+            meta.fps = 60.0
+
+
+# ---------------------------------------------------------------------------
 # VideoPredictions
 # ---------------------------------------------------------------------------
 
 
 class TestVideoPredictions:
-    def test_from_dict(self, video_payload: dict) -> None:
-        vp = VideoPredictions.model_validate(video_payload)
+    def test_from_dict(self, video_predictions_payload: dict) -> None:
+        vp = VideoPredictions.model_validate(video_predictions_payload)
         assert len(vp) == 2
-        assert vp.frames() == ["frame_0000.png", "frame_0001.png"]
-        assert vp["frame_0000.png"].boxes[0][4] == pytest.approx(0.95)
+        assert vp.frame_names() == ["frame_000000", "frame_000001"]
+        assert vp["frame_000000"].boxes[0][4] == pytest.approx(0.95)
+        assert vp.metadata.fps == pytest.approx(30.0)
 
-    def test_iteration(self, video_payload: dict) -> None:
-        vp = VideoPredictions.model_validate(video_payload)
-        assert list(vp) == ["frame_0000.png", "frame_0001.png"]
+    def test_iteration(self, video_predictions_payload: dict) -> None:
+        vp = VideoPredictions.model_validate(video_predictions_payload)
+        assert list(vp) == ["frame_000000", "frame_000001"]
 
-    def test_save_and_load_roundtrip(self, tmp_path: Path, video_payload: dict) -> None:
-        vp = VideoPredictions.model_validate(video_payload)
+    def test_rejects_missing_metadata(self, video_predictions_payload: dict) -> None:
+        del video_predictions_payload["metadata"]
+        with pytest.raises(ValidationError):
+            VideoPredictions.model_validate(video_predictions_payload)
+
+    def test_save_and_load_roundtrip(
+        self,
+        tmp_path: Path,
+        video_predictions_payload: dict,
+    ) -> None:
+        vp = VideoPredictions.model_validate(video_predictions_payload)
         path = tmp_path / "preds" / "video.json"
         save_video_predictions(path, vp)
         assert path.exists()
         loaded = load_video_predictions(path)
-        assert loaded.frames() == vp.frames()
-        assert loaded["frame_0000.png"].poses3d == vp["frame_0000.png"].poses3d
+        assert loaded.frame_names() == vp.frame_names()
+        assert loaded.metadata == vp.metadata
+        assert loaded["frame_000000"].poses3d == vp["frame_000000"].poses3d
+
+    def test_save_is_atomic(
+        self,
+        tmp_path: Path,
+        video_predictions_payload: dict,
+    ) -> None:
+        vp = VideoPredictions.model_validate(video_predictions_payload)
+        path = tmp_path / "video.json"
+        save_video_predictions(path, vp)
+        assert path.exists()
+        tmps = list(tmp_path.glob("video.json.tmp"))
+        assert tmps == []
 
 
 # ---------------------------------------------------------------------------
@@ -102,9 +171,16 @@ class TestVideoPredictions:
 
 
 class TestJobResults:
-    def test_save_and_load_roundtrip(self, tmp_path: Path, video_payload: dict) -> None:
+    def test_save_and_load_roundtrip(
+        self,
+        tmp_path: Path,
+        video_predictions_payload: dict,
+    ) -> None:
         jr = JobResults.model_validate(
-            {"video_a.mp4": video_payload, "video_b.mp4": video_payload}
+            {
+                "video_a.mp4": video_predictions_payload,
+                "video_b.mp4": video_predictions_payload,
+            }
         )
         path = tmp_path / "results.json"
         save_job_results(path, jr)

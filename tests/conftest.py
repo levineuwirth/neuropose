@@ -5,8 +5,16 @@ from __future__ import annotations
 import os
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
+import cv2
+import numpy as np
 import pytest
+
+
+# ---------------------------------------------------------------------------
+# Environment isolation
+# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)
@@ -36,3 +44,65 @@ def _isolate_environment(
 def xdg_home() -> Path:
     """Return the isolated ``$XDG_DATA_HOME`` set up by ``_isolate_environment``."""
     return Path(os.environ["XDG_DATA_HOME"])
+
+
+# ---------------------------------------------------------------------------
+# Synthetic video + fake MeTRAbs model
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def synthetic_video(tmp_path: Path) -> Path:
+    """Generate a tiny synthetic video at test time.
+
+    The fixture writes a 5-frame, 32×32 MJPG-encoded ``.avi`` file. MJPG is
+    chosen over ``mp4v`` because it ships with ``opencv-python-headless`` on
+    every platform we target, whereas ``mp4v`` occasionally requires an
+    ffmpeg binary that may not be present on minimal CI runners.
+    """
+    path = tmp_path / "synthetic.avi"
+    fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+    writer = cv2.VideoWriter(str(path), fourcc, 30.0, (32, 32))
+    assert writer.isOpened(), "cv2.VideoWriter failed to open; MJPG codec missing?"
+    for i in range(5):
+        # Distinct brightness per frame so a downstream check could verify
+        # the test is actually reading frame-by-frame.
+        frame = np.full((32, 32, 3), i * 40, dtype=np.uint8)
+        writer.write(frame)
+    writer.release()
+    assert path.exists() and path.stat().st_size > 0, "Synthetic video is empty."
+    return path
+
+
+class _FakeMetrabsModel:
+    """Minimal stand-in for the MeTRAbs model used in unit tests.
+
+    Returns deterministic pose data (one person, two joints) per call so
+    tests can assert on shapes without importing TensorFlow or downloading
+    the real model. The returned arrays are plain numpy so the estimator's
+    ``_to_nested_list`` helper exercises its non-``numpy()`` branch.
+    """
+
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    def detect_poses(
+        self,
+        image: Any,
+        *,
+        default_fov_degrees: float,
+        skeleton: str,
+    ) -> dict[str, np.ndarray]:
+        del image, default_fov_degrees, skeleton  # signature-compatible with MeTRAbs
+        self.call_count += 1
+        return {
+            "boxes": np.array([[0.0, 0.0, 32.0, 32.0, 0.95]]),
+            "poses3d": np.array([[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]]),
+            "poses2d": np.array([[[10.0, 20.0], [30.0, 40.0]]]),
+        }
+
+
+@pytest.fixture
+def fake_metrabs_model() -> _FakeMetrabsModel:
+    """Return a fresh fake MeTRAbs model instance for a single test."""
+    return _FakeMetrabsModel()

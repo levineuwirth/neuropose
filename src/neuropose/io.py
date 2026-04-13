@@ -1,14 +1,15 @@
 """I/O helpers and schema definitions for NeuroPose prediction data.
 
-Defines pydantic models for per-frame predictions, per-video aggregated
-predictions, job-level aggregated results, and the persistent status file.
-All models are validated on load, so malformed files are caught at the
-boundary rather than at some downstream call site.
+Defines pydantic models for per-frame predictions, per-video predictions
+(with metadata envelope), job-level aggregated results, and the persistent
+status file. All models are validated on load, so malformed files are caught
+at the boundary rather than at some downstream call site.
 
-Atomicity: :func:`save_status` and :func:`save_job_results` write to a sibling
-temp file and then atomically rename, so a crash mid-write will not leave a
-partially-written file behind. This matches the crash-resilience guarantee
-the interfacer daemon makes to callers.
+Atomicity: :func:`save_status`, :func:`save_job_results`, and
+:func:`save_video_predictions` write to a sibling temp file and then
+atomically rename, so a crash mid-write will not leave a partially-written
+file behind. This matches the crash-resilience guarantee the interfacer
+daemon makes to callers.
 """
 
 from __future__ import annotations
@@ -55,26 +56,51 @@ class FramePrediction(BaseModel):
     )
 
 
-class VideoPredictions(RootModel[dict[str, FramePrediction]]):
-    """Per-frame predictions for a single video, keyed by frame filename.
+class VideoMetadata(BaseModel):
+    """Metadata about the source video for a set of predictions.
 
-    Frame names are expected to follow the ``frame_<index>.png`` convention
-    written by the estimator, but no constraint is enforced at the schema
-    level so downstream consumers can key by any naming scheme.
+    Essential for reproducibility: the frame count lets downstream analysis
+    verify completeness, and the fps lets it convert frame indices to real
+    time without needing access to the original video file.
+
+    Intentionally does NOT include the source file path or filename, which
+    may encode subject-identifying information. Callers that need provenance
+    should store it out-of-band in accordance with the data-handling policy.
     """
 
-    def frames(self) -> list[str]:
-        """Return the frame names in insertion order."""
-        return list(self.root.keys())
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    frame_count: int = Field(ge=0, description="Number of frames actually processed.")
+    fps: float = Field(ge=0.0, description="Source video frame rate (frames per second).")
+    width: int = Field(ge=0, description="Source video frame width in pixels.")
+    height: int = Field(ge=0, description="Source video frame height in pixels.")
+
+
+class VideoPredictions(BaseModel):
+    """Per-frame predictions for a single video, paired with video metadata.
+
+    The ``frames`` mapping is keyed by frame identifier (``frame_<index>`` by
+    convention, zero-padded to 6 digits). The identifier is a stable string,
+    not a filesystem path — no PNG file is implied.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    metadata: VideoMetadata
+    frames: dict[str, FramePrediction]
+
+    def frame_names(self) -> list[str]:
+        """Return frame identifiers in insertion order."""
+        return list(self.frames.keys())
 
     def __len__(self) -> int:
-        return len(self.root)
+        return len(self.frames)
 
     def __iter__(self) -> Iterator[str]:  # type: ignore[override]
-        return iter(self.root)
+        return iter(self.frames)
 
     def __getitem__(self, key: str) -> FramePrediction:
-        return self.root[key]
+        return self.frames[key]
 
 
 class JobResults(RootModel[dict[str, VideoPredictions]]):
@@ -85,7 +111,7 @@ class JobResults(RootModel[dict[str, VideoPredictions]]):
     """
 
     def videos(self) -> list[str]:
-        """Return the video names in insertion order."""
+        """Return video names in insertion order."""
         return list(self.root.keys())
 
     def __len__(self) -> int:
@@ -143,7 +169,7 @@ def load_video_predictions(path: Path) -> VideoPredictions:
 
 
 def save_video_predictions(path: Path, predictions: VideoPredictions) -> None:
-    """Serialize per-video predictions to a JSON file."""
+    """Serialize per-video predictions to a JSON file atomically."""
     path.parent.mkdir(parents=True, exist_ok=True)
     _write_json_atomic(path, predictions.model_dump(mode="json"))
 
