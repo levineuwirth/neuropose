@@ -1,0 +1,72 @@
+# ---------------------------------------------------------------------------
+# NeuroPose docs build.
+#
+# Builds the mkdocs-material site on every push to main and on every PR
+# that touches docs/ or mkdocs.yml, and uploads the rendered site as a
+# workflow artifact for review.
+#
+# Deployment to GitHub Pages is intentionally NOT wired up yet: the repo
+# is private until the data-handling policy (docs/data-policy.md) lands
+# and is reviewed, and GH Pages for private repos requires a paid plan.
+# When the repo flips public, add a deploy job that uploads the artifact
+# via ``actions/deploy-pages@v4``.
+# ---------------------------------------------------------------------------
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "src/neuropose/**"      # API reference reflects source docstrings
+      - ".github/workflows/docs.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "src/neuropose/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.9.16"
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  build:
+    name: Build (mkdocs --strict)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+
+      - name: Install project + dev dependencies
+        # Docs build needs the project importable so mkdocstrings can
+        # introspect the source modules for the API reference pages.
+        run: uv sync --group dev
+
+      - name: Build site (strict)
+        run: uv run mkdocs build --strict
+
+      - name: Upload rendered site as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: neuropose-docs-${{ github.sha }}
+          path: site/
+          retention-days: 14

@@ -1,0 +1,3 @@
+# `neuropose.config`
+
+::: neuropose.config
