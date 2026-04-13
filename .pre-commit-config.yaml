@@ -1,0 +1,43 @@
+# ---------------------------------------------------------------------------
+# NeuroPose pre-commit configuration.
+#
+# Run locally with:
+#     uv run pre-commit install         # one-time setup in the dev venv
+#     uv run pre-commit run --all-files # full-tree lint + format pass
+#
+# Pyright is intentionally NOT in this config. It is run in CI only, so that
+# pre-commit stays fast on every commit and so we do not have to maintain a
+# duplicate declaration of the project's runtime dependencies inside
+# `additional_dependencies`. See `.github/workflows/ci.yml` (commit 3).
+# ---------------------------------------------------------------------------
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+      - id: detect-private-key
+      - id: forbid-submodules
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.0
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks

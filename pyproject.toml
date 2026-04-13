@@ -70,6 +70,91 @@ Issues = "https://git.levineuwirth.org/neuwirth/neuropose/issues"
 # [project.scripts]
 # neuropose = "neuropose.cli:app"
 
+# ---------------------------------------------------------------------------
+# Dependency groups (PEP 735). Install a group with `uv sync --group dev` or
+# `uv pip install --group dev`. These are not shipped with the wheel.
+# ---------------------------------------------------------------------------
+[dependency-groups]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "ruff>=0.8",
+  "pyright>=1.1.390",
+  "pre-commit>=4.0",
+]
+
+# ---------------------------------------------------------------------------
+# Ruff (linter + formatter). See https://docs.astral.sh/ruff/rules/ for the
+# meaning of each rule code. The selection is deliberately broader than the
+# Python community default — we want lint noise early rather than cruft late.
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+extend-exclude = ["notebooks"]
+
+[tool.ruff.lint]
+select = [
+  "E", "W",   # pycodestyle
+  "F",        # pyflakes
+  "I",        # isort
+  "B",        # flake8-bugbear
+  "UP",       # pyupgrade
+  "SIM",      # flake8-simplify
+  "RUF",      # ruff-specific
+  "N",        # pep8-naming
+  "C4",       # flake8-comprehensions
+  "PTH",      # flake8-use-pathlib
+  "PT",       # flake8-pytest-style
+  "TID",      # flake8-tidy-imports
+  "NPY",      # numpy-specific
+  "D",        # pydocstyle
+]
+ignore = [
+  "D100",  # missing module docstring — too strict for internal modules
+  "D104",  # missing package docstring — too strict for __init__.py
+  "D203",  # conflicts with D211
+  "D213",  # conflicts with D212
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D", "PLR2004"]
+"scripts/**" = ["D"]
+"src/neuropose/_*.py" = ["D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.isort]
+known-first-party = ["neuropose"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+# ---------------------------------------------------------------------------
+# Pyright. "standard" rather than "strict" because the TensorFlow / OpenCV /
+# scikit-learn stubs would generate thousands of unknown-type warnings under
+# strict mode. We tighten toward strict after the MeTRAbs stack is pinned.
+# ---------------------------------------------------------------------------
+[tool.pyright]
+include = ["src", "tests"]
+exclude = [
+  "**/__pycache__",
+  "**/.venv",
+  "notebooks",
+]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
+reportMissingTypeStubs = "none"
+reportUnknownMemberType = "none"
+reportUnknownArgumentType = "none"
+reportUnknownVariableType = "none"
+reportUnknownParameterType = "none"
+
+# ---------------------------------------------------------------------------
+# Hatch build configuration.
+# ---------------------------------------------------------------------------
 [tool.hatch.build.targets.wheel]
 packages = ["src/neuropose"]
 
