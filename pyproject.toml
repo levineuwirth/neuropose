@@ -66,9 +66,8 @@ Homepage = "https://git.levineuwirth.org/neuwirth/neuropose"
 Repository = "https://git.levineuwirth.org/neuwirth/neuropose"
 Issues = "https://git.levineuwirth.org/neuwirth/neuropose/issues"
 
-# CLI entry point will be wired up in commit 7 once src/neuropose/cli.py lands.
-# [project.scripts]
-# neuropose = "neuropose.cli:app"
+[project.scripts]
+neuropose = "neuropose.cli:run"
 
 # ---------------------------------------------------------------------------
 # Dependency groups (PEP 735). Install a group with `uv sync --group dev` or
