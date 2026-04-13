@@ -93,18 +93,5 @@ jobs:
       - name: Install project + dev dependencies
         run: uv sync --group dev
 
-      # Tolerates exit code 5 ("no tests collected") because the tests
-      # directory does not exist yet at commit 3. Commit 4 lands the first
-      # tests and this tolerance block should be removed at that point.
       - name: Pytest
-        shell: bash
-        run: |
-          set +e
-          uv run pytest --tb=short
-          ec=$?
-          set -e
-          if [ "$ec" -eq 5 ]; then
-            echo "::warning::pytest collected no tests. Remove this tolerance after commit 4 lands real tests."
-            exit 0
-          fi
-          exit "$ec"
+        run: uv run pytest --tb=short

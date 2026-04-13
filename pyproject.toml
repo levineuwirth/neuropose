@@ -133,6 +133,17 @@ known-first-party = ["neuropose"]
 docstring-code-format = true
 
 # ---------------------------------------------------------------------------
+# Pytest.
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = ["--strict-markers", "--strict-config", "-ra"]
+markers = [
+  "slow: tests that require model download or are otherwise slow (deselect with '-m \"not slow\"')",
+]
+
+# ---------------------------------------------------------------------------
 # Pyright. "standard" rather than "strict" because the TensorFlow / OpenCV /
 # scikit-learn stubs would generate thousands of unknown-type warnings under
 # strict mode. We tighten toward strict after the MeTRAbs stack is pinned.
