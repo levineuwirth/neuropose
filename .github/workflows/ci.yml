@@ -1,0 +1,110 @@
+# ---------------------------------------------------------------------------
+# NeuroPose CI — runs on the GitHub mirror (the self-hosted forge at
+# git.levineuwirth.org is authoritative for development; this workflow is the
+# mirror's validation layer).
+#
+# Three jobs, run in parallel:
+#   1. lint       — ruff check + ruff format --check
+#   2. typecheck  — pyright in standard mode
+#   3. test       — pytest (tolerates exit code 5 until commit 4 lands)
+#
+# Dependency management is via uv and PEP-735 dependency groups declared in
+# pyproject.toml. `--only-group dev` is used where the runtime dependencies
+# (TensorFlow, OpenCV, …) are not required, to keep the lint job fast.
+# ---------------------------------------------------------------------------
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.9.16"
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+
+      - name: Install dev tooling (no runtime deps)
+        run: uv sync --only-group dev
+
+      - name: Ruff check
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+  typecheck:
+    name: Type check (pyright)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+
+      - name: Install project + dev dependencies
+        run: uv sync --group dev
+
+      - name: Pyright
+        run: uv run pyright
+
+  test:
+    name: Tests (pytest)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+
+      - name: Install project + dev dependencies
+        run: uv sync --group dev
+
+      # Tolerates exit code 5 ("no tests collected") because the tests
+      # directory does not exist yet at commit 3. Commit 4 lands the first
+      # tests and this tolerance block should be removed at that point.
+      - name: Pytest
+        shell: bash
+        run: |
+          set +e
+          uv run pytest --tb=short
+          ec=$?
+          set -e
+          if [ "$ec" -eq 5 ]; then
+            echo "::warning::pytest collected no tests. Remove this tolerance after commit 4 lands real tests."
+            exit 0
+          fi
+          exit "$ec"
