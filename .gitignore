@@ -1,0 +1,93 @@
+# ---------------------------------------------------------------------------
+# NeuroPose .gitignore
+#
+# Load-bearing: this file is part of the data-handling policy. Do NOT remove
+# entries without reviewing docs/data-policy.md (once it lands). Subject data
+# and model weights must never enter the repository.
+# ---------------------------------------------------------------------------
+
+# --- Python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# --- Distribution / packaging ----------------------------------------------
+build/
+dist/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+sdist/
+wheels/
+share/python-wheels/
+*.egg-info/
+*.egg
+MANIFEST
+.installed.cfg
+
+# --- Virtual environments --------------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# --- Caches and type-checker artifacts -------------------------------------
+.cache/
+.mypy_cache/
+.pyright/
+.pytype/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+
+# --- Jupyter ---------------------------------------------------------------
+.ipynb_checkpoints/
+
+# --- Editors / OS ----------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+\#*\#
+.#*
+.DS_Store
+Thumbs.db
+
+# --- Docs site build -------------------------------------------------------
+site/
+
+# --- Data and model weights (policy-enforced) ------------------------------
+# Runtime job directories, subject data, and downloaded model caches must
+# never be committed. The default runtime location is under $XDG_DATA_HOME
+# (outside the repo), but these rules are kept as belt-and-suspenders.
+/data/
+/jobs/
+/models/
+/runtime/
+*.mov
+*.mp4
+*.avi
+*.mkv
+*.MOV
+# Allow committing example videos under tests/fixtures/ explicitly.
+!tests/fixtures/**
+
+# --- Secrets ---------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key

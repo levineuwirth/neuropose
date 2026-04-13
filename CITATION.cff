@@ -1,0 +1,52 @@
+cff-version: 1.2.0
+message: >-
+  If you use NeuroPose in your research, please cite it using the metadata
+  below. A DOI and an associated manuscript citation will be added once the
+  first paper is submitted.
+title: "NeuroPose: a 3D human pose estimation pipeline for clinical movement research"
+abstract: >-
+  NeuroPose is an open-source pipeline that wraps the MeTRAbs 3D human pose
+  estimation model into a reproducible, job-based workflow intended for
+  clinical gait and movement-assessment research. It provides video
+  ingestion, per-frame inference, a well-defined JSON output schema, and
+  downstream analysis utilities.
+type: software
+version: "0.1.0.dev0"
+license: MIT
+repository-code: "https://git.levineuwirth.org/neuwirth/neuropose"
+url: "https://git.levineuwirth.org/neuwirth/neuropose"
+keywords:
+  - pose estimation
+  - biomechanics
+  - gait analysis
+  - clinical research
+  - motion capture
+  - MeTRAbs
+authors:
+  - family-names: Shu
+    given-names: Liqi
+    name-suffix: "MD"
+    email: liqi_shu@brown.edu
+    affiliation: "Brown University"
+  - family-names: Neuwirth
+    given-names: Levi
+    email: ln@levineuwirth.org
+    affiliation: "Brown University"
+  - family-names: Man
+    given-names: David
+    email: david_man@brown.edu
+    affiliation: "Brown University"
+  - family-names: Tummala
+    given-names: Praneeth
+    email: praneeth_tummala@brown.edu
+    affiliation: "Brown University"
+references:
+  - type: software
+    title: MeTRAbs
+    authors:
+      - family-names: Sárándi
+        given-names: István
+        email: istvan.sarandi@uni-tuebingen.de
+    repository-code: "https://github.com/isarandi/metrabs"
+    license: MIT
+    year: 2020
