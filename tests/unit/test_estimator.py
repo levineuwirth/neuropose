@@ -60,10 +60,28 @@ class TestModelGuard:
         with pytest.raises(ModelNotLoadedError):
             estimator.process_video(synthetic_video)
 
-    def test_load_model_stub_raises_not_implemented(self) -> None:
+    def test_load_model_delegates_to_loader(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``Estimator.load_model`` should delegate to ``load_metrabs_model``.
+
+        We verify the delegation without actually invoking TensorFlow or the
+        network: the loader is monkeypatched to return a sentinel, and we
+        assert it ends up as the estimator's model.
+        """
+        sentinel = object()
+        called_with: list[Path | None] = []
+
+        def fake_loader(cache_dir: Path | None = None) -> object:
+            called_with.append(cache_dir)
+            return sentinel
+
+        monkeypatch.setattr("neuropose.estimator.load_metrabs_model", fake_loader)
         estimator = Estimator()
-        with pytest.raises(NotImplementedError, match="commit 11"):
-            estimator.load_model()
+        estimator.load_model(cache_dir=Path("/tmp/fake-cache"))
+        assert estimator.model is sentinel
+        assert called_with == [Path("/tmp/fake-cache")]
 
     def test_load_model_is_idempotent_when_already_loaded(
         self,

@@ -197,7 +197,7 @@ def dtw_relation(
 
 def _validate_same_joint_count(a: np.ndarray, b: np.ndarray) -> None:
     """Raise :class:`ValueError` if ``a`` and ``b`` disagree on joint count."""
-    if a.ndim < 2 or b.ndim < 2:
+    if a.ndim != 3 or b.ndim != 3:
         raise ValueError(
             f"expected 3D arrays of shape (frames, joints, 3); got a.ndim={a.ndim}, b.ndim={b.ndim}"
         )

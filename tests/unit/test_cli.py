@@ -42,6 +42,28 @@ def runner() -> CliRunner:
     return CliRunner()
 
 
+@pytest.fixture
+def stub_metrabs_loader(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Patch the MeTRAbs loader to raise a recognisable stub error.
+
+    The real loader downloads a ~675 MB tarball and loads it through
+    TensorFlow — neither suitable for unit tests. This fixture replaces
+    it with a function that raises ``NotImplementedError`` tagged with a
+    stable "pending commit 11" marker so the CLI's ``NotImplementedError``
+    handler still has a testable failure mode. The handler itself is
+    defensive code for any future stub; this fixture lets us keep it
+    honest without reintroducing a real stub in production code.
+    """
+
+    def fake_loader(cache_dir: Path | None = None) -> object:
+        del cache_dir
+        raise NotImplementedError(
+            "pending commit 11: MeTRAbs loader stubbed for unit testing"
+        )
+
+    monkeypatch.setattr("neuropose.estimator.load_metrabs_model", fake_loader)
+
+
 # ---------------------------------------------------------------------------
 # Top-level options
 # ---------------------------------------------------------------------------
@@ -107,12 +129,18 @@ class TestConfigOption:
         assert result.exit_code == EXIT_USAGE
         assert "invalid config" in result.output.lower()
 
-    def test_valid_config_reaches_subcommand(self, runner: CliRunner, tmp_path: Path) -> None:
+    def test_valid_config_reaches_subcommand(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        stub_metrabs_loader: None,
+    ) -> None:
         # A valid config should flow through the callback and into the
-        # subcommand. For ``watch``, the subcommand will then fail on the
-        # model load (NotImplementedError from the commit-11 stub), which
-        # is the behaviour we want to observe here — exit code
-        # ``EXIT_PENDING``.
+        # subcommand. ``watch`` will then reach the model-loading step, at
+        # which point the stubbed loader raises ``NotImplementedError`` and
+        # the CLI exits ``EXIT_PENDING``. Observing that exit code is how
+        # we confirm the config made it all the way to the subcommand.
+        del stub_metrabs_loader
         data_dir = tmp_path / "data"
         path = tmp_path / "good.yaml"
         path.write_text(
@@ -135,12 +163,18 @@ class TestConfigOption:
 
 
 class TestWatch:
-    def test_without_model_exits_pending(self, runner: CliRunner) -> None:
-        """The commit-11 stub raises NotImplementedError on model load.
+    def test_without_model_exits_pending(
+        self,
+        runner: CliRunner,
+        stub_metrabs_loader: None,
+    ) -> None:
+        """The stubbed loader raises ``NotImplementedError`` on model load.
 
         The CLI should catch it and exit with ``EXIT_PENDING`` and a message
-        pointing at the pending commit.
+        pointing at the pending commit. The real loader is patched out by
+        ``stub_metrabs_loader`` so this test does not download the model.
         """
+        del stub_metrabs_loader
         result = runner.invoke(app, ["watch"])
         assert result.exit_code == EXIT_PENDING
         assert "commit 11" in result.output
@@ -162,7 +196,9 @@ class TestProcess:
         self,
         runner: CliRunner,
         synthetic_video: Path,
+        stub_metrabs_loader: None,
     ) -> None:
+        del stub_metrabs_loader
         result = runner.invoke(app, ["process", str(synthetic_video)])
         assert result.exit_code == EXIT_PENDING
         assert "commit 11" in result.output
