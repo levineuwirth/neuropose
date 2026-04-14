@@ -29,7 +29,9 @@ classifiers = [
   "Development Status :: 2 - Pre-Alpha",
   "Intended Audience :: Science/Research",
   "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX",
   "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Topic :: Scientific/Engineering :: Image Recognition",
@@ -37,10 +39,14 @@ classifiers = [
   "Typing :: Typed",
 ]
 
-# Runtime dependencies. Versions intentionally unpinned at this stage: the
-# TensorFlow / MeTRAbs stack is pending a sanity check against the updated
-# upstream MeTRAbs release. Tightened pins will land alongside the MeTRAbs
-# model loader and smoke test.
+# Runtime dependencies. The TensorFlow floor is set to 2.16 because that is
+# the first release with native ``darwin/arm64`` wheels published under the
+# ``tensorflow`` package name on PyPI. Older versions would force a marker
+# split to ``tensorflow-macos`` on Apple Silicon. The MeTRAbs SavedModel was
+# serialized with TF 2.10 and uses only stock ops (no custom kernels), so
+# any TF >= 2.10 loads it; 2.16 is chosen for cross-platform install
+# uniformity, not for any MeTRAbs-side requirement. End-to-end verification
+# against TF 2.21 is logged in RESEARCH.md.
 dependencies = [
   "typer>=0.12",
   "pydantic>=2.6",
@@ -49,7 +55,7 @@ dependencies = [
   "numpy>=1.26",
   "opencv-python-headless>=4.9",
   "matplotlib>=3.8",
-  "tensorflow>=2.15,<3.0",
+  "tensorflow>=2.16,<3.0",
   "tensorflow-hub>=0.16",
 ]
 
@@ -60,11 +66,23 @@ analysis = [
   "scikit-learn>=1.4",
   "sktime>=0.28",
 ]
+# Optional Apple Silicon GPU acceleration via Metal Performance Shaders.
+# This is a PluggableDevice maintained by Apple, NOT by the TensorFlow team,
+# with its own version-compatibility table (see
+# https://developer.apple.com/metal/tensorflow-plugin/) and a documented
+# history of producing numerically-divergent results on some ops under
+# Keras 3. It is deliberately opt-in. Install with
+# `pip install 'neuropose[metal]'` or `uv sync --extra metal`. The platform
+# markers ensure it is silently ignored on every non-Apple-Silicon install.
+metal = [
+  "tensorflow-metal>=1.2,<2; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
 
 [project.urls]
 Homepage = "https://git.levineuwirth.org/neuwirth/neuropose"
 Repository = "https://git.levineuwirth.org/neuwirth/neuropose"
 Issues = "https://git.levineuwirth.org/neuwirth/neuropose/issues"
+Changelog = "https://git.levineuwirth.org/neuwirth/neuropose/src/branch/main/CHANGELOG.md"
 
 [project.scripts]
 neuropose = "neuropose.cli:run"
@@ -82,6 +100,13 @@ dev = [
   "pre-commit>=4.0",
   "mkdocs-material>=9.5",
   "mkdocstrings[python]>=0.26",
+  # Analyzer subpackage runtime deps. Duplicated from the `analysis`
+  # optional-dependencies extra so dev contributors can run the analyzer
+  # tests without also having to install the extra. sktime is NOT
+  # included here because we do not (yet) wrap it — users who want
+  # classification install `pip install neuropose[analysis]` themselves.
+  "fastdtw>=0.3.4",
+  "scipy>=1.12",
 ]
 
 # ---------------------------------------------------------------------------
@@ -175,6 +200,7 @@ include = [
   "src/neuropose",
   "README.md",
   "LICENSE",
+  "CHANGELOG.md",
   "AUTHORS.md",
   "CITATION.cff",
 ]

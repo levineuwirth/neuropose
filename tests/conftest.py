@@ -13,6 +13,42 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
+# Slow test opt-in
+# ---------------------------------------------------------------------------
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Register the ``--runslow`` command-line flag.
+
+    Tests marked ``@pytest.mark.slow`` (typically the integration tests
+    under ``tests/integration/`` that download the MeTRAbs model) are
+    skipped by default and run only when ``--runslow`` is passed. This
+    keeps the default ``pytest`` invocation fast and offline-safe, and
+    keeps CI's default test job from burning minutes on a 2 GB download
+    on every push.
+    """
+    parser.addoption(
+        "--runslow",
+        action="store_true",
+        default=False,
+        help="run tests marked @pytest.mark.slow (model download required)",
+    )
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config,
+    items: list[pytest.Item],
+) -> None:
+    """Skip ``@slow`` tests unless ``--runslow`` was given on the command line."""
+    if config.getoption("--runslow"):
+        return
+    skip_slow = pytest.mark.skip(reason="need --runslow to run slow tests")
+    for item in items:
+        if "slow" in item.keywords:
+            item.add_marker(skip_slow)
+
+
+# ---------------------------------------------------------------------------
 # Environment isolation
 # ---------------------------------------------------------------------------
 

@@ -1,0 +1,336 @@
+# Changelog
+
+All notable changes to NeuroPose are recorded in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+This section covers the ground-up rewrite of NeuroPose. The entries
+below describe the difference between the previous internal prototype
+and the state of the repository at the first tagged release, and will
+be split into per-release sections once tagging begins.
+
+### Added
+
+#### Package structure and tooling
+
+- `src/neuropose/` package layout with `py.typed` marker, MIT `LICENSE`,
+  policy-enforcing `.gitignore`, pinned Python 3.11 (`.python-version`),
+  and `pyproject.toml` with full project metadata, classifiers, and
+  URL pointers. The runtime TensorFlow dependency is pinned to
+  `tensorflow>=2.16,<3.0` — see *Changed* below for the rationale.
+- `[project.optional-dependencies].analysis` extra for fastdtw, scipy,
+  scikit-learn, and sktime — install via `pip install neuropose[analysis]`.
+- `[project.optional-dependencies].metal` extra pulling
+  `tensorflow-metal>=1.2,<2` under `sys_platform == 'darwin' and
+  platform_machine == 'arm64'` environment markers. Opt-in only via
+  `pip install 'neuropose[metal]'` or `uv sync --extra metal`; silently
+  no-op on every non-Apple-Silicon platform. The Metal path is **not**
+  exercised in CI and is documented as experimental in
+  `docs/getting-started.md` — users enabling it are expected to
+  spot-check numerics against the CPU path before trusting results
+  downstream.
+- `[dependency-groups].dev` (PEP 735) with the full dev + docs + analyzer
+  toolchain: pytest, pytest-cov, ruff, pyright, pre-commit,
+  mkdocs-material, mkdocstrings, fastdtw, and scipy. `uv sync --group dev`
+  gives contributors everything needed to run the whole suite.
+- `AUTHORS.md`, `CITATION.cff` (with a MeTRAbs upstream `references:`
+  entry), and a MIT-licensed `LICENSE` with an explicit MeTRAbs
+  attribution paragraph.
+- Pre-commit configuration (`.pre-commit-config.yaml`) running ruff,
+  ruff-format, gitleaks (secret scanning), a 500 KB-limit
+  large-files hook, end-of-file fixers, trailing-whitespace fixers,
+  and YAML/TOML/JSON validators. Pyright is deliberately **not** in
+  pre-commit — it runs in CI only, so pre-commit stays fast.
+- Ruff configuration in `pyproject.toml` with a deliberately broad
+  rule selection (pycodestyle, pyflakes, isort, bugbear, pyupgrade,
+  simplify, ruff-specific, pep8-naming, comprehensions, pathlib,
+  pytest-style, tidy-imports, numpy-specific, pydocstyle with numpy
+  convention). Per-file ignores for tests and private modules.
+- Pyright configuration in `standard` mode (not `strict` — TF/OpenCV
+  stubs would otherwise drown the signal). Unknown-type reports are
+  explicitly silenced until the TensorFlow version pin is settled.
+- Pytest configuration with strict markers, an opt-in `slow` marker,
+  and a `--runslow` CLI flag implemented in
+  `tests/conftest.py::pytest_collection_modifyitems` so integration
+  tests stay out of the default run.
+
+#### CI / infrastructure
+
+- GitHub Actions workflow `.github/workflows/ci.yml` running three
+  parallel jobs — **lint** (ruff), **typecheck** (pyright), and
+  **test** (pytest) — on every push and PR to `main`. Uses `uv` with
+  a pinned version (`0.9.16`) and cache-enabled setup for fast reruns.
+  Concurrency control cancels superseded runs on the same branch.
+- GitHub Actions workflow `.github/workflows/docs.yml` that builds the
+  mkdocs-material site on every relevant push and uploads the rendered
+  site as a 14-day workflow artifact. GitHub Pages deployment is
+  intentionally not wired up yet; the workflow header comment
+  describes what to add when the repo flips public.
+
+#### Runtime modules
+
+- **`neuropose.config`** — `Settings` class built on
+  `pydantic-settings`. Field-level validation for `device`,
+  `poll_interval_seconds`, and `default_fov_degrees`; explicit
+  `from_yaml()` classmethod (no implicit config-file discovery); XDG
+  defaults for `data_dir` and `model_cache_dir` (`~/.local/share/neuropose/…`)
+  so runtime data never lives inside the repository; `ensure_dirs()`
+  as an explicit method so construction remains filesystem-side-effect-free.
+- **`neuropose.io`** — validated prediction schemas:
+  `FramePrediction` (frozen), `VideoMetadata` (frame count, fps,
+  width, height), `VideoPredictions` (metadata envelope + frames
+  mapping), `JobResults`, `JobStatus` enum, `JobStatusEntry` (with a
+  structured `error` field), and `StatusFile`. Load and save helpers
+  with an atomic tmp-file-then-rename pattern for every state file.
+  `load_status` is deliberately crash-resilient: missing, corrupt,
+  or non-mapping JSON returns an empty `StatusFile` rather than
+  raising.
+- **`neuropose.estimator`** — `Estimator` class that streams frames
+  directly from OpenCV into the model, with no intermediate write-to-
+  disk-then-read-back-as-PNG round trip. Returns a typed
+  `ProcessVideoResult` containing a validated `VideoPredictions`
+  object; does not touch the filesystem. Constructor accepts an
+  injected model for testability; `load_model()` delegates to
+  `neuropose._model.load_metrabs_model()`. Typed exception hierarchy:
+  `EstimatorError`, `ModelNotLoadedError`, `VideoDecodeError`.
+  Optional per-frame `progress` callback for long videos. Frame
+  identifier convention is `frame_000000` (six-digit zero-pad, no
+  extension — no file is implied).
+- **`neuropose.visualize`** — `visualize_predictions()` for per-frame
+  2D + 3D overlay rendering. `matplotlib.use("Agg")` is called inside
+  the function rather than at module import, so `import neuropose.visualize`
+  has no global side effect. Explicit deep-copy of `poses3d` before
+  axis rotation to prevent the aliasing bug from the previous
+  prototype. Supports `frame_indices` for rendering a subset of
+  frames.
+- **`neuropose.interfacer`** — `Interfacer` job-lifecycle daemon with
+  dependency-injected `Settings` and `Estimator`. Single-instance
+  enforcement via `fcntl.flock` on `data_dir/.neuropose.lock`.
+  Crash-recovery `recover_stuck_jobs()` that marks any status entries
+  left in `processing` state as failed with an "interrupted"
+  message and quarantines their inputs. Graceful shutdown on SIGINT/
+  SIGTERM with an interruptible sleep. Structured error fields on
+  every failed job. `run_once()` factored out of the main loop so
+  tests can drive single iterations without threading. Quarantine
+  collision handling (`job_a.1`, `job_a.2`, …) and empty-directory
+  silent-skip heuristic (mid-copy directories are not marked failed).
+- **`neuropose._model`** — MeTRAbs model loader. Downloads the pinned
+  tarball from the upstream RWTH Aachen URL
+  (`metrabs_eff2l_y4_384px_800k_28ds.tar.gz`), verifies its SHA-256
+  checksum, atomically extracts to a staging directory and renames
+  into place, and loads via `tf.saved_model.load`. Streams the
+  download and hash computation in 1 MB chunks so memory is flat.
+  One automatic retry on SHA-256 mismatch (in case the previous
+  download was truncated). Post-load interface check for
+  `detect_poses`, `per_skeleton_joint_names`, and
+  `per_skeleton_joint_edges`.
+- **`neuropose.analyzer`** — post-processing subpackage with lazy
+  imports for the heavy dependencies:
+  - `analyzer.dtw` — three DTW entry points (`dtw_all`,
+    `dtw_per_joint`, `dtw_relation`) over fastdtw, with a frozen
+    `DTWResult` dataclass. See `RESEARCH.md` for the ongoing
+    methodology investigation.
+  - `analyzer.features` — `predictions_to_numpy`,
+    `normalize_pose_sequence` (uniform and axis-wise),
+    `pad_sequences` (edge-padding), `extract_joint_angles` (NaN on
+    degenerate vectors), `extract_feature_statistics`
+    (`FeatureStatistics` frozen dataclass), and a `find_peaks` thin
+    wrapper around `scipy.signal.find_peaks`.
+- **`neuropose.cli`** — Typer-based command-line interface with
+  three subcommands: `watch` (run the daemon), `process <video>`
+  (run the estimator on a single video), and `analyze <results>`
+  (stub). Global options `--config/-c`, `--verbose/-v`, `--quiet/-q`,
+  `--version`. Structured error handling turns expected exceptions
+  (`FileNotFoundError` on config, `ValidationError`, `AlreadyRunningError`,
+  `NotImplementedError`, `KeyboardInterrupt`) into clear stderr
+  messages and distinct exit codes (`EXIT_OK=0`, `EXIT_USAGE=2`,
+  `EXIT_PENDING=3`, `EXIT_INTERRUPTED=130`). The CLI entry point is
+  wired in `[project.scripts]` as `neuropose = "neuropose.cli:run"`.
+
+#### Documentation
+
+- **mkdocs-material documentation site** under `docs/` with the full
+  theme configuration (light/dark toggle, tabs navigation, search),
+  `mkdocstrings` Python handler set to numpy docstring style with
+  source links, and a `pymdownx` extension set for admonitions,
+  tabbed content, collapsible details, and syntax-highlighted code
+  blocks. Nav: Home → Getting Started → Architecture → API Reference
+  (auto-generated from module docstrings) → Development → Deployment.
+- Prose documentation pages: `docs/index.md` (public landing page),
+  `docs/getting-started.md` (install, CLI, output schema, Python API,
+  visualization, troubleshooting), `docs/architecture.md` (three-stage
+  pipeline, data flow, runtime directory layout, design principles),
+  `docs/development.md` (contributor setup, tests, lint/type,
+  commit hygiene, release process stub), and `docs/deployment.md`
+  (systemd user unit, Docker pointer, GPU notes, backup guidance).
+- API reference stubs `docs/api/{config,estimator,interfacer,io,visualize}.md`
+  — each is a two-line file containing a `:::` mkdocstrings directive,
+  so the API documentation is generated from the source docstrings
+  at build time and cannot drift out of sync.
+- `RESEARCH.md` at the repo root: a living R&D log for DTW
+  methodology alternatives and MeTRAbs self-hosting / fine-tuning
+  plans. Not user-facing documentation; not linked from the mkdocs
+  nav.
+
+#### Tests
+
+- `tests/unit/` covering configuration (defaults, validation, YAML
+  loading, env overrides, `ensure_dirs`), IO schema and helpers
+  (roundtrip, atomic save, frozen-model guarantees, corruption
+  tolerance), the estimator (construction, model-guard, process path
+  with fake MeTRAbs model, error paths), the visualize module
+  (smoke tests + an anti-regression check for the audit §6 aliasing
+  bug), the interfacer (construction, discovery, process-job happy
+  and failure paths, stuck-job recovery, lock, run_once,
+  interruptible sleep), the CLI (top-level options, config handling,
+  each subcommand's error path), the analyzer DTW helpers, and the
+  analyzer features helpers.
+- `tests/conftest.py` with an autouse `_isolate_environment` fixture
+  that redirects `$HOME` and `$XDG_DATA_HOME` at a per-test temp
+  directory so no test can accidentally write to the developer's real
+  machine, and clears any `NEUROPOSE_*` env vars. Adds a
+  `synthetic_video` fixture (cv2-generated 5-frame MJPG AVI sized
+  for most unit tests) and a `fake_metrabs_model` fixture.
+- `tests/integration/test_estimator_smoke.py` — end-to-end model
+  loader + estimator smoke test against the real MeTRAbs tarball,
+  marked `@pytest.mark.slow`, skipped by default, opt-in via
+  `--runslow`. Uses a session-scoped model cache so the download
+  happens at most once per run.
+
+#### Operations
+
+- `Dockerfile` — CPU image based on `python:3.11-slim-bookworm`.
+  Installs the package with the `analysis` extra, runs as non-root
+  user `neuropose` (UID 1000), exposes `/data` as a volume, sets
+  `NEUROPOSE_DATA_DIR` and `NEUROPOSE_MODEL_CACHE_DIR` to point at
+  the mounted volume, and uses `ENTRYPOINT ["neuropose"]` with
+  `CMD ["watch"]` so the default is the daemon and overrides are
+  ergonomic.
+- `.dockerignore` that aggressively excludes developer tooling,
+  caches, tests, documentation sources, research notes, and
+  ancillary scripts from the build context.
+- `scripts/download_model.py` — standalone pre-warm script that
+  invokes `load_metrabs_model()` with an optional `--cache-dir`
+  override. Useful for seeding a deployment's cache before cutting
+  off network access.
+
+### Changed
+
+- **Relicensed from AGPL-3.0 (used in the prior internal prototype)
+  to MIT.** The prior license was copied from precedent rather than
+  chosen deliberately; the MIT relicense better matches both the
+  project's "research software others can build on" intent and the
+  upstream MeTRAbs license.
+- Reorganised from the prior `backend/` + runtime-data layout into
+  a `src/neuropose/` Python package. Runtime data now lives outside
+  the repository by default (under `$XDG_DATA_HOME/neuropose/`) so
+  subject-identifying inputs cannot accidentally end up in a
+  `git add`.
+- Frame identifier convention changed from `frame_0000.png` (old,
+  misleading — no PNG file exists) to `frame_000000` (six-digit
+  zero-pad, no extension, pure identifier).
+- Estimator API: `process_video()` now returns a typed
+  `ProcessVideoResult` containing a validated `VideoPredictions`
+  object, instead of a stringly-typed dict with `results_path` and
+  `frame_count`. The estimator no longer owns filesystem
+  destinations — the caller decides where to save.
+- `VideoPredictions` schema now carries a `VideoMetadata` envelope
+  (frame count, fps, width, height) alongside the per-frame
+  predictions. Downstream analysis can convert frame indices to
+  real time without needing access to the original video.
+- Interfacer uses `datetime.now(UTC)` instead of the deprecated
+  `datetime.utcnow()`, addresses the "no-videos"-vs-exception-path
+  inconsistency (both now quarantine), and persists a structured
+  `error` string on every failure for grep-friendly diagnostics.
+- **TensorFlow pin tightened to `tensorflow>=2.16,<3.0`.** The 2.16
+  floor is the first release with native `darwin/arm64` wheels under
+  the `tensorflow` package name on PyPI, so a single dependency line
+  works across Linux x86_64, Linux arm64, and Apple Silicon macOS
+  without platform markers or a separate `tensorflow-macos` package.
+  Empirical verification: the pinned MeTRAbs SavedModel
+  (`metrabs_eff2l_y4_384px_800k_28ds`, serialized with TF 2.10)
+  loads and runs `detect_poses` end-to-end on TF 2.21 + Keras 3 with
+  no errors, and exposes only stock TensorFlow ops (zero MeTRAbs
+  custom kernels). Full test matrix and op inventory in
+  `RESEARCH.md`.
+- Operating-system classifiers in `pyproject.toml` extended from
+  Linux-only to `POSIX` + `POSIX :: Linux` + `MacOS`, reflecting the
+  Apple Silicon support that the TF 2.16 floor makes real.
+
+### Removed
+
+- The previous `backend/analyzer.py` and `backend/validator.py`
+  stubs, which were non-functional and had never been run
+  successfully. `analyzer.py` is reintroduced as a pure-function
+  subpackage (`neuropose.analyzer`) rewritten from the prior
+  code's design intent. `validator.py` is reintroduced as a real
+  pytest suite (`tests/unit/` and `tests/integration/`).
+- The previous `reconstruct_from_frames` helper on the `Estimator`
+  — dead code, broken (dereferenced `self.OUTPUT_PATH`, which did
+  not exist), hardcoded 10 fps, never called. ffmpeg is a better
+  tool for this and can be invoked directly.
+- The previous `__main__` placeholder (`print("in main"); sys.exit()`)
+  on `estimator.py`. The real CLI now lives in `neuropose.cli`.
+- Every file under `docs/` in the previous prototype. All of the
+  pydoc-generated HTML, Org-mode sources, and handwritten markdown
+  described an older version of the API with methods
+  (`bind_and_block`, `construct_paths`, `toggle_visualization`,
+  `propagate_fatal_error`, etc.) that no longer exist. The docs are
+  now auto-generated from source docstrings via mkdocstrings so
+  drift is mechanically impossible.
+- The previous Dockerfile, which referenced a non-existent
+  `backend/requirements.txt`, attempted to `COPY ./model /app/model`
+  (no such directory), and set `CMD ["uvicorn", "main:app"]` for a
+  FastAPI app that never existed.
+- The previous `install/install.sh`, `install/#install.sh#` (an
+  Emacs autosave file), `install/install.sh~` (an Emacs backup file),
+  and `install/environment.yml`. The conda + `git+https` install
+  story is replaced by `uv` + a single `pyproject.toml`.
+- The previous `bit.ly/metrabs_1` URL shortener for the model
+  download, replaced by a pinned canonical URL on the upstream
+  RWTH Aachen "omnomnom" host, with SHA-256 verification on
+  download. See `RESEARCH.md` for the plan to mirror to
+  self-hosted storage.
+
+### Security
+
+- Large-files pre-commit hook (`check-added-large-files` with a
+  500 KB limit) blocks accidental commits of subject data or model
+  weights.
+- Gitleaks pre-commit hook scans every staged change for secret
+  material.
+- Dockerfile runs as a non-root user (UID 1000, `neuropose`) by
+  default.
+- Tarfile extraction uses the `filter="data"` option to block path
+  traversal and other tar-bomb attacks during MeTRAbs model
+  extraction.
+- SHA-256 pinning of the MeTRAbs model artifact. A change to the
+  upstream tarball contents fails the checksum verification and
+  requires a human-reviewed diff before the new artifact is
+  trusted.
+
+### Known limitations
+
+- Apple Silicon support is established by-construction (TF 2.16+
+  publishes native `darwin/arm64` wheels and the MeTRAbs SavedModel
+  uses only stock ops verified portable on TF 2.21) but has not yet
+  been exercised on real Apple Silicon hardware. A `macos-14` CI
+  matrix entry covering the unit tests is the cheapest way to catch
+  any regression and is planned as a follow-up.
+- Classification wrappers on top of sktime are deliberately **not**
+  included in `neuropose.analyzer` for this release. See `RESEARCH.md`
+  for the reasoning and the plan.
+- GPU support in Docker is not yet shipped (`Dockerfile.gpu` is
+  planned). The existing `Dockerfile` runs CPU-only.
+- `neuropose analyze` is a CLI stub that exits with a pending
+  message. The analyzer subpackage is usable from Python directly;
+  the CLI wrapper will follow once the analysis pipeline has a
+  concrete shape worth wrapping.
+- The data-handling policy referenced from `docs/deployment.md` and
+  `docs/index.md` (`docs/data-policy.md`) is being authored
+  separately and is not part of this changelog entry.
+
+[Unreleased]: https://git.levineuwirth.org/neuwirth/neuropose/compare/initial...HEAD

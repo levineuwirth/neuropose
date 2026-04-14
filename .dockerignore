@@ -1,0 +1,76 @@
+# ---------------------------------------------------------------------------
+# Files excluded from the Docker build context.
+#
+# The goal is to keep `docker build` fast (small context) and to avoid
+# accidentally baking developer tooling, caches, test data, or
+# IRB-sensitive artifacts into the image. Anything the runtime image
+# actually needs (pyproject.toml, README.md, LICENSE, src/) is copied
+# explicitly in the Dockerfile, so this ignore list can afford to be
+# aggressive.
+# ---------------------------------------------------------------------------
+
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# CI / developer configuration
+.github
+.pre-commit-config.yaml
+.python-version
+
+# Python caches and virtual environments
+.venv
+.venv-*
+venv
+env
+ENV
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+*.egg-info
+
+# Lint / type / test caches
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.pyright
+.coverage
+.coverage.*
+htmlcov
+.tox
+
+# Build outputs
+build
+dist
+site
+
+# Editor metadata
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Documentation sources (mkdocs builds these on the docs CI job, not
+# inside the runtime image) and the mkdocs config itself.
+docs
+mkdocs.yml
+notebooks
+
+# Ancillary developer scripts — the model downloader is useful in a
+# dev context but is redundant inside the image because the daemon
+# pulls the model on first start.
+scripts
+
+# Research / planning artifacts — not needed at runtime.
+RESEARCH.md
+audit.md
+
+# Tests — the image is a runtime artifact, not a test environment.
+tests
+
+# OS / tooling noise
+.DS_Store
+Thumbs.db

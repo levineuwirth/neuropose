@@ -2,25 +2,49 @@
 
 This page walks through installing NeuroPose, running your first pose
 estimation, and understanding the output. It targets researchers who are
-comfortable on a Linux command line but may not have used the package
+comfortable on a Unix command line but may not have used the package
 before.
-
-!!! info "Model loader status"
-    The MeTRAbs model loader is pending the commit-11 rewrite, during
-    which the upstream model URL and TensorFlow version will be pinned.
-    Until it lands, the `neuropose watch` and `neuropose process`
-    commands will exit with a clear "pending commit 11" message. The
-    Python API still works if you inject a model manually — see the
-    *Python API* section below for the current workaround.
 
 ## Prerequisites
 
-- Linux (Ubuntu 22.04+ or equivalent)
+- Linux (Ubuntu 22.04+ or equivalent) **or** macOS on Apple Silicon
+  (M1 / M2 / M3 / M4). Both are first-class targets — the same `uv`
+  install command works on either.
 - Python 3.11
 - [`uv`](https://github.com/astral-sh/uv) for dependency management
-- CUDA-capable GPU (optional, recommended for long videos)
-- Internet access on first run (for the model download, once the loader
-  lands)
+- CUDA-capable GPU (optional, recommended for long videos on Linux)
+- Internet access on first run (for the ~2 GB MeTRAbs model download)
+
+!!! note "Apple Silicon"
+    NeuroPose pins `tensorflow>=2.16`, which is the first TensorFlow
+    release with native `darwin/arm64` wheels on PyPI. Mac users get a
+    working CPU install from the same command Linux users run — no
+    `tensorflow-macos`, no platform markers, no extra configuration.
+
+    Metal GPU acceleration is available as an **opt-in extra** for
+    users who need it:
+
+    ```bash
+    uv sync --group dev --extra metal
+    # or, for non-editable installs:
+    pip install 'neuropose[metal]'
+    ```
+
+    This installs `tensorflow-metal`, Apple's PluggableDevice for TF,
+    which registers a Metal-backed `/GPU:0` device. It is **not
+    enabled by default** for two reasons:
+
+    1. **Untested in this codebase.** The default install (CPU) is
+       the path we verify in CI. The Metal path has not been
+       exercised against the MeTRAbs SavedModel; users are on their
+       own for validation.
+    2. **Numerical caveats.** `tensorflow-metal` has a documented
+       history of producing silently-divergent fp32 results on some
+       TF ops, especially under Keras 3. For clinical research where
+       reproducibility matters more than inference latency, CPU
+       inference is the safer default. If you enable Metal, spot-check
+       a few `poses3d` outputs against the CPU equivalent before
+       trusting results for any downstream measurement.
 
 ## Installation
 
@@ -170,20 +194,15 @@ back into a validated `VideoPredictions` object.
 ## Python API
 
 For scripting, debugging, or integrating NeuroPose into a larger
-pipeline, you can use the `Estimator` class directly. This is also the
-current workaround for the pending model loader:
+pipeline, you can use the `Estimator` class directly:
 
 ```python
+from neuropose._model import load_metrabs_model
 from neuropose.estimator import Estimator
 from neuropose.io import save_video_predictions
 from pathlib import Path
 
-# Load the MeTRAbs model however you like — e.g. via tensorflow_hub once
-# you know the canonical URL. Until commit 11 pins it, you'll need to
-# load it yourself here.
-import tensorflow_hub as tfhub
-model = tfhub.load("...")  # TODO: pin upstream URL
-
+model = load_metrabs_model()  # uses the XDG cache dir; downloads on first call
 estimator = Estimator(model=model, device="/GPU:0")
 result = estimator.process_video(Path("trial_01.mp4"))
 
@@ -228,8 +247,8 @@ function, so importing `neuropose.visualize` has no global side effects.
 
 | Problem | Resolution |
 |---|---|
-| `error: pending commit 11` from `neuropose watch` or `process` | The model loader is not yet implemented. Use the Python API with a manually-loaded model. |
 | `AlreadyRunningError` from the daemon | Another NeuroPose daemon already holds the lock file. Check `data_dir/.neuropose.lock` for the PID. |
 | `VideoDecodeError` on valid-looking video | The file may be corrupted or in a codec OpenCV was built without. Try re-encoding with `ffmpeg -i in.mov -c:v libx264 out.mp4`. |
 | Jobs stuck in `processing` state on startup | The daemon now recovers these automatically — they'll be marked failed and quarantined to `data_dir/failed/` on the next run. |
 | Daemon not detecting a new job | Check that the job is inside a **subdirectory** of `data_dir/in/`, not directly in `data_dir/in/`. Empty subdirectories are silently skipped (the daemon assumes you are still copying files). |
+| `SHA-256 mismatch` from the model loader | The MeTRAbs tarball download was truncated or the upstream artifact has changed. The loader retries once automatically; if it still fails, delete `model_cache_dir/metrabs_eff2l_y4_384px_800k_28ds.tar.gz` and let it re-download, or check `RESEARCH.md` for the canonical pin. |
