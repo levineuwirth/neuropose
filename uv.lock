@@ -688,6 +688,9 @@ analysis = [
     { name = "scipy" },
     { name = "sktime" },
 ]
+metal = [
+    { name = "tensorflow-metal", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -714,11 +717,12 @@ requires-dist = [
     { name = "scikit-learn", marker = "extra == 'analysis'", specifier = ">=1.4" },
     { name = "scipy", marker = "extra == 'analysis'", specifier = ">=1.12" },
     { name = "sktime", marker = "extra == 'analysis'", specifier = ">=0.28" },
-    { name = "tensorflow", specifier = ">=2.15,<3.0" },
+    { name = "tensorflow", specifier = ">=2.16,<3.0" },
     { name = "tensorflow-hub", specifier = ">=0.16" },
+    { name = "tensorflow-metal", marker = "platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'metal'", specifier = ">=1.2,<2" },
     { name = "typer", specifier = ">=0.12" },
 ]
-provides-extras = ["analysis"]
+provides-extras = ["analysis", "metal"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1349,6 +1353,18 @@ dependencies = [
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e5/50/00dba77925bf2a0a1e45d7bcf8a69a1d2534fb4bb277d9010bd148d2235e/tensorflow_hub-0.16.1-py2.py3-none-any.whl", hash = "sha256:e10c184b3d08daeafada11ffea2dd46781725b6bef01fad1f74d6634ad05311f", size = 30771, upload-time = "2024-01-30T14:49:07.005Z" },
+]
+
+[[package]]
+name = "tensorflow-metal"
+version = "1.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "six" },
+    { name = "wheel" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e0/09/91b253511cd59b9964672567f36b412daf3c70f75fcb5e84468fafa939ac/tensorflow_metal-1.2.0-cp311-cp311-macosx_12_0_arm64.whl", hash = "sha256:5fa7cee627031c14f45bd97ff0ef422cd6c3866199ff99cf29b94db6674ceb42", size = 1357400, upload-time = "2025-01-31T00:52:56.634Z" },
 ]
 
 [[package]]
