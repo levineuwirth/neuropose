@@ -30,7 +30,6 @@ from neuropose.io import (
     save_status,
 )
 
-
 # ---------------------------------------------------------------------------
 # Stubs and helpers
 # ---------------------------------------------------------------------------
@@ -133,9 +132,7 @@ class TestDiscoverNewJobs:
         interfacer = Interfacer(settings, Estimator(model=fake_metrabs_model))
         assert interfacer._discover_new_jobs(StatusFile(root={})) == []
 
-    def test_skips_empty_directories_silently(
-        self, tmp_path: Path, fake_metrabs_model
-    ) -> None:
+    def test_skips_empty_directories_silently(self, tmp_path: Path, fake_metrabs_model) -> None:
         settings = _make_settings(tmp_path)
         settings.ensure_dirs()
         (settings.input_dir / "empty_job").mkdir()
@@ -179,9 +176,7 @@ class TestDiscoverNewJobs:
         interfacer = Interfacer(settings, Estimator(model=fake_metrabs_model))
         assert interfacer._discover_new_jobs(status) == ["job_b"]
 
-    def test_dir_with_non_video_files_is_returned(
-        self, tmp_path: Path, fake_metrabs_model
-    ) -> None:
+    def test_dir_with_non_video_files_is_returned(self, tmp_path: Path, fake_metrabs_model) -> None:
         # Dirs that contain files but no *videos* are NOT silently skipped
         # — they should be returned so process_job marks them failed.
         settings = _make_settings(tmp_path)
@@ -286,7 +281,7 @@ class TestProcessJobFailure:
     ) -> None:
         settings = _make_settings(tmp_path)
         _prepare_job(settings, "job_a", videos=[synthetic_video])
-        interfacer = Interfacer(settings, _RaisingEstimator())
+        interfacer = Interfacer(settings, _RaisingEstimator())  # type: ignore[arg-type]
 
         entry = interfacer.process_job("job_a")
 
@@ -297,9 +292,7 @@ class TestProcessJobFailure:
         assert not (settings.input_dir / "job_a").exists()
         assert (settings.failed_dir / "job_a").exists()
 
-    def test_quarantine_collision_suffixes(
-        self, tmp_path: Path, fake_metrabs_model
-    ) -> None:
+    def test_quarantine_collision_suffixes(self, tmp_path: Path, fake_metrabs_model) -> None:
         settings = _make_settings(tmp_path)
         settings.ensure_dirs()
         # Pre-populate failed_dir with an existing entry for "job_a".
@@ -324,7 +317,7 @@ class TestProcessJobFailure:
         _prepare_job(settings, "job_a", videos=[synthetic_video])
         interfacer = Interfacer(
             settings,
-            _RaisingEstimator(exc=JobProcessingError("custom boom")),
+            _RaisingEstimator(exc=JobProcessingError("custom boom")),  # type: ignore[arg-type]
         )
 
         entry = interfacer.process_job("job_a")
@@ -369,9 +362,7 @@ class TestRecoverStuckJobs:
         assert not (settings.input_dir / "job_a").exists()
         assert (settings.failed_dir / "job_a").exists()
 
-    def test_does_not_touch_completed_entries(
-        self, tmp_path: Path, fake_metrabs_model
-    ) -> None:
+    def test_does_not_touch_completed_entries(self, tmp_path: Path, fake_metrabs_model) -> None:
         settings = _make_settings(tmp_path)
         settings.ensure_dirs()
         completed = datetime(2026, 4, 13, 10, 0, 0, tzinfo=UTC)
@@ -400,9 +391,7 @@ class TestRecoverStuckJobs:
         assert loaded.root["job_b"].status == JobStatus.FAILED
         assert loaded.root["job_b"].error == "old failure"
 
-    def test_no_status_file_is_noop(
-        self, tmp_path: Path, fake_metrabs_model
-    ) -> None:
+    def test_no_status_file_is_noop(self, tmp_path: Path, fake_metrabs_model) -> None:
         settings = _make_settings(tmp_path)
         interfacer = Interfacer(settings, Estimator(model=fake_metrabs_model))
         # Must not raise even though status_file does not exist.
@@ -476,9 +465,7 @@ class TestRunOnce:
 
 
 class TestLock:
-    def test_first_acquire_succeeds(
-        self, tmp_path: Path, fake_metrabs_model
-    ) -> None:
+    def test_first_acquire_succeeds(self, tmp_path: Path, fake_metrabs_model) -> None:
         settings = _make_settings(tmp_path)
         interfacer = Interfacer(settings, Estimator(model=fake_metrabs_model))
         try:
@@ -500,9 +487,7 @@ class TestLock:
         finally:
             first._release_lock()
 
-    def test_release_allows_subsequent_acquire(
-        self, tmp_path: Path, fake_metrabs_model
-    ) -> None:
+    def test_release_allows_subsequent_acquire(self, tmp_path: Path, fake_metrabs_model) -> None:
         settings = _make_settings(tmp_path)
         first = Interfacer(settings, Estimator(model=fake_metrabs_model))
         first._acquire_lock()
@@ -514,9 +499,7 @@ class TestLock:
         finally:
             second._release_lock()
 
-    def test_lock_file_contains_pid(
-        self, tmp_path: Path, fake_metrabs_model
-    ) -> None:
+    def test_lock_file_contains_pid(self, tmp_path: Path, fake_metrabs_model) -> None:
         settings = _make_settings(tmp_path)
         interfacer = Interfacer(settings, Estimator(model=fake_metrabs_model))
         try:
@@ -536,9 +519,7 @@ class TestLock:
 
 
 class TestInterruptibleSleep:
-    def test_zero_returns_immediately(
-        self, tmp_path: Path, fake_metrabs_model
-    ) -> None:
+    def test_zero_returns_immediately(self, tmp_path: Path, fake_metrabs_model) -> None:
         settings = _make_settings(tmp_path)
         interfacer = Interfacer(settings, Estimator(model=fake_metrabs_model))
         import time
@@ -548,9 +529,7 @@ class TestInterruptibleSleep:
         elapsed = time.monotonic() - start
         assert elapsed < 0.1
 
-    def test_stop_flag_wakes_sleep_early(
-        self, tmp_path: Path, fake_metrabs_model
-    ) -> None:
+    def test_stop_flag_wakes_sleep_early(self, tmp_path: Path, fake_metrabs_model) -> None:
         settings = _make_settings(tmp_path)
         interfacer = Interfacer(settings, Estimator(model=fake_metrabs_model))
         interfacer.stop()

@@ -67,7 +67,7 @@ def _require_fastdtw() -> tuple[Callable, Callable]:
         points the user at the ``analysis`` optional-dependencies extra.
     """
     try:
-        from fastdtw import fastdtw
+        from fastdtw import fastdtw  # type: ignore[attr-defined]
         from scipy.spatial.distance import euclidean
     except ImportError as exc:
         raise ImportError(
@@ -143,9 +143,7 @@ def dtw_per_joint(a: np.ndarray, b: np.ndarray) -> list[DTWResult]:
         a_joint = a[:, joint_idx, :]
         b_joint = b[:, joint_idx, :]
         distance, path = fastdtw(a_joint, b_joint, dist=euclidean)
-        results.append(
-            DTWResult(distance=float(distance), path=[tuple(p) for p in path])
-        )
+        results.append(DTWResult(distance=float(distance), path=[tuple(p) for p in path]))
     return results
 
 
@@ -188,8 +186,7 @@ def dtw_relation(
     num_joints = a.shape[1]
     if not (0 <= joint_i < num_joints) or not (0 <= joint_j < num_joints):
         raise ValueError(
-            f"joint indices must be in [0, {num_joints}); "
-            f"got joint_i={joint_i}, joint_j={joint_j}"
+            f"joint indices must be in [0, {num_joints}); got joint_i={joint_i}, joint_j={joint_j}"
         )
     fastdtw, euclidean = _require_fastdtw()
     disp_a = a[:, joint_j, :] - a[:, joint_i, :]
@@ -202,8 +199,7 @@ def _validate_same_joint_count(a: np.ndarray, b: np.ndarray) -> None:
     """Raise :class:`ValueError` if ``a`` and ``b`` disagree on joint count."""
     if a.ndim < 2 or b.ndim < 2:
         raise ValueError(
-            f"expected 3D arrays of shape (frames, joints, 3); "
-            f"got a.ndim={a.ndim}, b.ndim={b.ndim}"
+            f"expected 3D arrays of shape (frames, joints, 3); got a.ndim={a.ndim}, b.ndim={b.ndim}"
         )
     if a.shape[1] != b.shape[1]:
         raise ValueError(

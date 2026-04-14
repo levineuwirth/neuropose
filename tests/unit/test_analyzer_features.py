@@ -18,7 +18,6 @@ from neuropose.analyzer.features import (
 )
 from neuropose.io import VideoPredictions
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -30,10 +29,7 @@ def _make_predictions(num_frames: int, num_persons: int = 1) -> VideoPredictions
     for i in range(num_frames):
         frames[f"frame_{i:06d}"] = {
             "boxes": [[0.0, 0.0, 1.0, 1.0, 0.9]] * num_persons,
-            "poses3d": [
-                [[float(i), float(i) * 2, float(i) * 3], [0.0, 0.0, 0.0]]
-            ]
-            * num_persons,
+            "poses3d": [[[float(i), float(i) * 2, float(i) * 3], [0.0, 0.0, 0.0]]] * num_persons,
             "poses2d": [[[0.0, 0.0], [1.0, 1.0]]] * num_persons,
         }
     return VideoPredictions.model_validate(

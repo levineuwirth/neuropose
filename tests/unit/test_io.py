@@ -24,7 +24,6 @@ from neuropose.io import (
     save_video_predictions,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -107,7 +106,7 @@ class TestVideoMetadata:
                 fps=30.0,
                 width=640,
                 height=480,
-                source_path="/leak/me",
+                source_path="/leak/me",  # type: ignore[call-arg]
             )
 
     def test_is_frozen(self) -> None:

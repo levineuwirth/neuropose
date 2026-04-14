@@ -54,8 +54,7 @@ logger = logging.getLogger(__name__)
 # human. These are supply-chain constants.
 
 _MODEL_URL = (
-    "https://omnomnom.vision.rwth-aachen.de/data/metrabs/"
-    "metrabs_eff2l_y4_384px_800k_28ds.tar.gz"
+    "https://omnomnom.vision.rwth-aachen.de/data/metrabs/metrabs_eff2l_y4_384px_800k_28ds.tar.gz"
 )
 _MODEL_SHA256 = "fa31b5b043f227588c3d224e56db89307d021bfbbb52e36028919f90e1f96c89"
 _MODEL_ARCHIVE_NAME = "metrabs_eff2l_y4_384px_800k_28ds.tar.gz"
@@ -174,13 +173,13 @@ def _download_with_progress(url: str, dest: Path) -> None:
     logger.info("Downloading %s → %s", url, dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
 
-    request = urllib.request.Request(  # noqa: S310
+    request = urllib.request.Request(
         url,
         headers={"User-Agent": "neuropose/0.1"},
     )
 
     try:
-        with urllib.request.urlopen(  # noqa: S310
+        with urllib.request.urlopen(
             request,
             timeout=_DOWNLOAD_SOCKET_TIMEOUT,
         ) as response:
@@ -210,15 +209,12 @@ def _download_with_progress(url: str, dest: Path) -> None:
     except Exception as exc:
         # Clean up partial file so the next call re-downloads cleanly.
         dest.unlink(missing_ok=True)
-        raise RuntimeError(
-            f"Failed to download MeTRAbs model from {url}: {exc}"
-        ) from exc
+        raise RuntimeError(f"Failed to download MeTRAbs model from {url}: {exc}") from exc
 
     if total_bytes > 0 and downloaded != total_bytes:
         dest.unlink(missing_ok=True)
         raise RuntimeError(
-            f"Download from {url} was truncated: "
-            f"got {downloaded} bytes, expected {total_bytes}."
+            f"Download from {url} was truncated: got {downloaded} bytes, expected {total_bytes}."
         )
     logger.info("Download complete: %d bytes", downloaded)
 
@@ -308,9 +304,7 @@ def _find_saved_model(root: Path) -> Path:
     """
     candidates = list(root.rglob("saved_model.pb"))
     if not candidates:
-        raise RuntimeError(
-            f"no saved_model.pb found under {root}; tarball layout unexpected"
-        )
+        raise RuntimeError(f"no saved_model.pb found under {root}; tarball layout unexpected")
     if len(candidates) > 1:
         raise RuntimeError(
             f"multiple saved_model.pb files found under {root}: "
@@ -328,7 +322,7 @@ def _tf_load(saved_model_dir: Path) -> Any:
     code paths that never reach the loader.
     """
     try:
-        import tensorflow as tf  # noqa: PLC0415
+        import tensorflow as tf
     except ImportError as exc:
         raise RuntimeError(
             "TensorFlow is required to load the MeTRAbs model but is not installed. "
@@ -340,9 +334,7 @@ def _tf_load(saved_model_dir: Path) -> Any:
     try:
         model = tf.saved_model.load(str(saved_model_dir))
     except Exception as exc:
-        raise RuntimeError(
-            f"Failed to load SavedModel from {saved_model_dir}: {exc}"
-        ) from exc
+        raise RuntimeError(f"Failed to load SavedModel from {saved_model_dir}: {exc}") from exc
 
     missing = [attr for attr in _REQUIRED_MODEL_ATTRS if not hasattr(model, attr)]
     if missing:

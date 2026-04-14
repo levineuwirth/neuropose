@@ -145,7 +145,7 @@ def _render_frame(
     view: str,
     joint_edges: Sequence[tuple[int, int]] | None,
     plt: Any,
-    Rectangle: Any,
+    Rectangle: Any,  # noqa: N803  — matches matplotlib.patches.Rectangle class name
 ) -> None:
     """Render one frame's 2D overlay + 3D scatter to ``out_path``."""
     # Explicit copies. The previous prototype mutated the caller's data via

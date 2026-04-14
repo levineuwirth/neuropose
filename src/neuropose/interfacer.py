@@ -26,6 +26,7 @@ Key guarantees
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import logging
 import os
@@ -381,15 +382,11 @@ class Interfacer:
     def _restore_signal_handlers(self) -> None:
         """Restore the signal handlers that were in place before :meth:`run`."""
         if self._prev_sigint is not None:
-            try:
+            with contextlib.suppress(ValueError, TypeError):
                 signal.signal(signal.SIGINT, self._prev_sigint)  # type: ignore[arg-type]
-            except (ValueError, TypeError):
-                pass
         if self._prev_sigterm is not None:
-            try:
+            with contextlib.suppress(ValueError, TypeError):
                 signal.signal(signal.SIGTERM, self._prev_sigterm)  # type: ignore[arg-type]
-            except (ValueError, TypeError):
-                pass
         self._prev_sigint = None
         self._prev_sigterm = None
 
@@ -421,14 +418,10 @@ class Interfacer:
         """Release the single-instance lock if held."""
         if self._lock_fd is None:
             return
-        try:
+        with contextlib.suppress(OSError):
             fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
-        except OSError:
-            pass
-        try:
+        with contextlib.suppress(OSError):
             os.close(self._lock_fd)
-        except OSError:
-            pass
         self._lock_fd = None
 
 
@@ -439,11 +432,7 @@ class Interfacer:
 
 def _discover_videos(job_dir: Path) -> Iterable[Path]:
     """Yield paths to all supported video files in ``job_dir`` (non-recursive)."""
-    return (
-        p
-        for p in job_dir.iterdir()
-        if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS
-    )
+    return (p for p in job_dir.iterdir() if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS)
 
 
 def _is_empty_dir(path: Path) -> bool:

@@ -12,7 +12,6 @@ from neuropose.analyzer.dtw import (
     dtw_relation,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -31,18 +30,14 @@ def simple_sequence() -> np.ndarray:
 
 
 class TestDtwAll:
-    def test_identical_sequences_distance_zero(
-        self, simple_sequence: np.ndarray
-    ) -> None:
+    def test_identical_sequences_distance_zero(self, simple_sequence: np.ndarray) -> None:
         result = dtw_all(simple_sequence, simple_sequence)
         assert isinstance(result, DTWResult)
         assert result.distance == pytest.approx(0.0, abs=1e-9)
         # Identical sequences produce a diagonal warping path.
         assert all(i == j for i, j in result.path)
 
-    def test_shifted_sequences_distance_zero(
-        self, simple_sequence: np.ndarray
-    ) -> None:
+    def test_shifted_sequences_distance_zero(self, simple_sequence: np.ndarray) -> None:
         """DTW should absorb a pure time shift without penalty."""
         # Duplicate the first frame to create a one-frame shift.
         shifted = np.concatenate([simple_sequence[:1], simple_sequence], axis=0)
@@ -74,9 +69,7 @@ class TestDtwAll:
 
 
 class TestDtwPerJoint:
-    def test_returns_one_result_per_joint(
-        self, simple_sequence: np.ndarray
-    ) -> None:
+    def test_returns_one_result_per_joint(self, simple_sequence: np.ndarray) -> None:
         results = dtw_per_joint(simple_sequence, simple_sequence)
         assert len(results) == simple_sequence.shape[1]
         for result in results:
@@ -112,9 +105,7 @@ class TestDtwPerJoint:
 
 
 class TestDtwRelation:
-    def test_identical_sequences_distance_zero(
-        self, simple_sequence: np.ndarray
-    ) -> None:
+    def test_identical_sequences_distance_zero(self, simple_sequence: np.ndarray) -> None:
         result = dtw_relation(simple_sequence, simple_sequence, joint_i=0, joint_j=1)
         assert result.distance == pytest.approx(0.0, abs=1e-9)
 

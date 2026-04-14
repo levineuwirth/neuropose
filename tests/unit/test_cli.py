@@ -73,9 +73,7 @@ class TestTopLevelOptions:
             result = runner.invoke(app, [subcommand, "--help"])
             assert result.exit_code == EXIT_OK, f"{subcommand} --help failed"
 
-    def test_verbose_and_quiet_are_mutually_exclusive(
-        self, runner: CliRunner
-    ) -> None:
+    def test_verbose_and_quiet_are_mutually_exclusive(self, runner: CliRunner) -> None:
         result = runner.invoke(app, ["--verbose", "--quiet", "watch"])
         assert result.exit_code != EXIT_OK
 
@@ -94,9 +92,7 @@ class TestConfigOption:
         # We just verify it mentions the missing file's name.
         assert "nope.yaml" in result.output
 
-    def test_invalid_config_yaml_structure(
-        self, runner: CliRunner, tmp_path: Path
-    ) -> None:
+    def test_invalid_config_yaml_structure(self, runner: CliRunner, tmp_path: Path) -> None:
         path = tmp_path / "bad.yaml"
         path.write_text("- not a mapping\n- another item\n")
         result = runner.invoke(app, ["--config", str(path), "watch"])
@@ -111,9 +107,7 @@ class TestConfigOption:
         assert result.exit_code == EXIT_USAGE
         assert "invalid config" in result.output.lower()
 
-    def test_valid_config_reaches_subcommand(
-        self, runner: CliRunner, tmp_path: Path
-    ) -> None:
+    def test_valid_config_reaches_subcommand(self, runner: CliRunner, tmp_path: Path) -> None:
         # A valid config should flow through the callback and into the
         # subcommand. For ``watch``, the subcommand will then fail on the
         # model load (NotImplementedError from the commit-11 stub), which
@@ -158,9 +152,7 @@ class TestWatch:
 
 
 class TestProcess:
-    def test_missing_video_exits_usage(
-        self, runner: CliRunner, tmp_path: Path
-    ) -> None:
+    def test_missing_video_exits_usage(self, runner: CliRunner, tmp_path: Path) -> None:
         result = runner.invoke(app, ["process", str(tmp_path / "nope.mp4")])
         # click's path existence check fires before our callback, so the
         # exit is a usage error.

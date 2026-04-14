@@ -36,9 +36,7 @@ class TestVisualizePredictions:
         predictions_for_synthetic: VideoPredictions,
     ) -> None:
         output_dir = tmp_path / "viz"
-        written = visualize_predictions(
-            synthetic_video, predictions_for_synthetic, output_dir
-        )
+        written = visualize_predictions(synthetic_video, predictions_for_synthetic, output_dir)
         assert len(written) == 5
         for path in written:
             assert path.exists()

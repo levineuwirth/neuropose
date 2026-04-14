@@ -17,14 +17,14 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 
-class JobStatus(str, Enum):
+class JobStatus(StrEnum):
     """Lifecycle state of a single processing job."""
 
     PROCESSING = "processing"
@@ -94,12 +94,15 @@ class VideoPredictions(BaseModel):
         return list(self.frames.keys())
 
     def __len__(self) -> int:
+        """Return the number of frames."""
         return len(self.frames)
 
     def __iter__(self) -> Iterator[str]:  # type: ignore[override]
+        """Iterate over frame identifiers in insertion order."""
         return iter(self.frames)
 
     def __getitem__(self, key: str) -> FramePrediction:
+        """Return the :class:`FramePrediction` for ``key``."""
         return self.frames[key]
 
 
@@ -115,12 +118,15 @@ class JobResults(RootModel[dict[str, VideoPredictions]]):
         return list(self.root.keys())
 
     def __len__(self) -> int:
+        """Return the number of videos in the job."""
         return len(self.root)
 
     def __iter__(self) -> Iterator[str]:  # type: ignore[override]
+        """Iterate over video names in insertion order."""
         return iter(self.root)
 
     def __getitem__(self, key: str) -> VideoPredictions:
+        """Return the :class:`VideoPredictions` for ``key``."""
         return self.root[key]
 
 
@@ -150,9 +156,11 @@ class StatusFile(RootModel[dict[str, JobStatusEntry]]):
         return len(self.root) == 0
 
     def __len__(self) -> int:
+        """Return the number of job entries."""
         return len(self.root)
 
     def __iter__(self) -> Iterator[str]:  # type: ignore[override]
+        """Iterate over job names in insertion order."""
         return iter(self.root)
 
 

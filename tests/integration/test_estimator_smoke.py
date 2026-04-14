@@ -41,16 +41,16 @@ pytestmark = pytest.mark.slow
 
 @pytest.fixture
 def integration_video(tmp_path: Path) -> Path:
-    """Generate a 384×288 synthetic video sized for MeTRAbs input.
+    """Generate a 384x288 synthetic video sized for MeTRAbs input.
 
     The default ``synthetic_video`` fixture in ``tests/conftest.py``
-    produces 32×32 frames, which is too small for MeTRAbs's 384 px
+    produces 32x32 frames, which is too small for MeTRAbs's 384 px
     input and may cause the detector pipeline to short-circuit
     unpredictably. This fixture produces a modestly-sized video so
     the smoke test's plumbing assertions are meaningful.
     """
     path = tmp_path / "integration.avi"
-    fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+    fourcc = cv2.VideoWriter_fourcc(*"MJPG")  # type: ignore[attr-defined]
     writer = cv2.VideoWriter(str(path), fourcc, 30.0, (384, 288))
     assert writer.isOpened(), "cv2.VideoWriter failed to open; MJPG codec missing?"
     for i in range(5):
@@ -60,7 +60,8 @@ def integration_video(tmp_path: Path) -> Path:
         frame = np.full((288, 384, 3), 100 + i * 10, dtype=np.uint8)
         writer.write(frame)
     writer.release()
-    assert path.exists() and path.stat().st_size > 0
+    assert path.exists()
+    assert path.stat().st_size > 0
     return path
 
 
@@ -95,9 +96,7 @@ class TestMetrabsLoader:
         assert hasattr(model_a, "detect_poses")
         assert hasattr(model_b, "detect_poses")
 
-    def test_berkeley_mhad_skeleton_is_present(
-        self, shared_model_cache_dir: Path
-    ) -> None:
+    def test_berkeley_mhad_skeleton_is_present(self, shared_model_cache_dir: Path) -> None:
         """The estimator pins skeleton='berkeley_mhad_43'; verify it exists."""
         model = load_metrabs_model(cache_dir=shared_model_cache_dir)
         joint_names = model.per_skeleton_joint_names["berkeley_mhad_43"]

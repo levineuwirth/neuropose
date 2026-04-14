@@ -84,8 +84,7 @@ class Settings(BaseSettings):
     def _validate_device(cls, value: str) -> str:
         if not _DEVICE_PATTERN.match(value):
             raise ValueError(
-                f"device must match '/(CPU|GPU):<index>' "
-                f"(e.g. '/CPU:0', '/GPU:0'); got {value!r}"
+                f"device must match '/(CPU|GPU):<index>' (e.g. '/CPU:0', '/GPU:0'); got {value!r}"
             )
         return value
 
@@ -140,9 +139,7 @@ class Settings(BaseSettings):
         if data is None:
             data = {}
         if not isinstance(data, dict):
-            raise ValueError(
-                f"config file must contain a YAML mapping; got {type(data).__name__}"
-            )
+            raise ValueError(f"config file must contain a YAML mapping; got {type(data).__name__}")
         return cls(**data)
 
     def ensure_dirs(self) -> None:

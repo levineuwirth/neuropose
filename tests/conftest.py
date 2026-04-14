@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import cv2
 import numpy as np
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Slow test opt-in
@@ -57,7 +55,7 @@ def pytest_collection_modifyitems(
 def _isolate_environment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path_factory: pytest.TempPathFactory,
-) -> Iterator[None]:
+) -> None:
     """Isolate every test from the developer's real home directory.
 
     Points ``$HOME`` and ``$XDG_DATA_HOME`` at per-test temp directories so
@@ -73,7 +71,6 @@ def _isolate_environment(
     for key in list(os.environ):
         if key.startswith("NEUROPOSE_"):
             monkeypatch.delenv(key, raising=False)
-    yield
 
 
 @pytest.fixture
@@ -91,13 +88,13 @@ def xdg_home() -> Path:
 def synthetic_video(tmp_path: Path) -> Path:
     """Generate a tiny synthetic video at test time.
 
-    The fixture writes a 5-frame, 32×32 MJPG-encoded ``.avi`` file. MJPG is
+    The fixture writes a 5-frame, 32x32 MJPG-encoded ``.avi`` file. MJPG is
     chosen over ``mp4v`` because it ships with ``opencv-python-headless`` on
     every platform we target, whereas ``mp4v`` occasionally requires an
     ffmpeg binary that may not be present on minimal CI runners.
     """
     path = tmp_path / "synthetic.avi"
-    fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+    fourcc = cv2.VideoWriter_fourcc(*"MJPG")  # type: ignore[attr-defined]
     writer = cv2.VideoWriter(str(path), fourcc, 30.0, (32, 32))
     assert writer.isOpened(), "cv2.VideoWriter failed to open; MJPG codec missing?"
     for i in range(5):
@@ -106,7 +103,8 @@ def synthetic_video(tmp_path: Path) -> Path:
         frame = np.full((32, 32, 3), i * 40, dtype=np.uint8)
         writer.write(frame)
     writer.release()
-    assert path.exists() and path.stat().st_size > 0, "Synthetic video is empty."
+    assert path.exists(), "Synthetic video was not written."
+    assert path.stat().st_size > 0, "Synthetic video is empty."
     return path
 
 

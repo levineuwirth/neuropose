@@ -26,11 +26,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
 from neuropose.io import VideoPredictions
-
 
 # ---------------------------------------------------------------------------
 # VideoPredictions → numpy
@@ -122,9 +122,7 @@ def normalize_pose_sequence(
         sequence is degenerate (zero extent on every axis).
     """
     if sequence.ndim != 3 or sequence.shape[-1] != 3:
-        raise ValueError(
-            f"expected (frames, joints, 3); got shape {sequence.shape}"
-        )
+        raise ValueError(f"expected (frames, joints, 3); got shape {sequence.shape}")
     result = sequence.astype(float, copy=True)
     mins = result.reshape(-1, 3).min(axis=0)
     maxs = result.reshape(-1, 3).max(axis=0)
@@ -187,9 +185,7 @@ def pad_sequences(
     """
     if not sequences:
         if target_length is None:
-            raise ValueError(
-                "cannot infer target_length from an empty sequence list"
-            )
+            raise ValueError("cannot infer target_length from an empty sequence list")
         return []
 
     first = sequences[0]
@@ -197,13 +193,10 @@ def pad_sequences(
     for idx, seq in enumerate(sequences):
         if seq.shape[1:] != trailing_shape:
             raise ValueError(
-                f"sequence {idx} has trailing shape {seq.shape[1:]}; "
-                f"expected {trailing_shape}"
+                f"sequence {idx} has trailing shape {seq.shape[1:]}; expected {trailing_shape}"
             )
 
-    length = target_length if target_length is not None else max(
-        s.shape[0] for s in sequences
-    )
+    length = target_length if target_length is not None else max(s.shape[0] for s in sequences)
 
     padded: list[np.ndarray] = []
     for seq in sequences:
@@ -255,17 +248,13 @@ def extract_joint_angles(
         If any joint index in ``triplets`` is out of range.
     """
     if sequence.ndim != 3 or sequence.shape[-1] != 3:
-        raise ValueError(
-            f"expected (frames, joints, 3); got shape {sequence.shape}"
-        )
+        raise ValueError(f"expected (frames, joints, 3); got shape {sequence.shape}")
     num_joints = sequence.shape[1]
     columns: list[np.ndarray] = []
     for a_idx, b_idx, c_idx in triplets:
         for idx in (a_idx, b_idx, c_idx):
             if not (0 <= idx < num_joints):
-                raise ValueError(
-                    f"joint index {idx} out of range [0, {num_joints})"
-                )
+                raise ValueError(f"joint index {idx} out of range [0, {num_joints})")
         v1 = sequence[:, a_idx, :] - sequence[:, b_idx, :]
         v2 = sequence[:, c_idx, :] - sequence[:, b_idx, :]
         n1 = np.linalg.norm(v1, axis=1)
@@ -343,7 +332,7 @@ def extract_feature_statistics(values: np.ndarray) -> FeatureStatistics:
 # ---------------------------------------------------------------------------
 
 
-def find_peaks(values: np.ndarray, **kwargs: object) -> np.ndarray:
+def find_peaks(values: np.ndarray, **kwargs: Any) -> np.ndarray:
     """Return indices of local maxima in a 1D series.
 
     Thin wrapper around :func:`scipy.signal.find_peaks` that returns

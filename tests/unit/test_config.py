@@ -77,7 +77,7 @@ class TestValidation:
 
     def test_extra_fields_rejected(self, xdg_home: Path) -> None:
         with pytest.raises(ValidationError):
-            Settings(nonexistent_field=True)
+            Settings(nonexistent_field=True)  # type: ignore[call-arg]
 
 
 class TestYamlLoad:
@@ -85,9 +85,7 @@ class TestYamlLoad:
 
     def test_valid(self, tmp_path: Path, xdg_home: Path) -> None:
         config_path = tmp_path / "config.yaml"
-        config_path.write_text(
-            yaml.safe_dump({"device": "/GPU:0", "poll_interval_seconds": 30})
-        )
+        config_path.write_text(yaml.safe_dump({"device": "/GPU:0", "poll_interval_seconds": 30}))
         settings = Settings.from_yaml(config_path)
         assert settings.device == "/GPU:0"
         assert settings.poll_interval_seconds == 30
