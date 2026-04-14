@@ -50,7 +50,7 @@ def _default_model_cache_dir() -> Path:
 class Settings(BaseSettings):
     """NeuroPose runtime configuration.
 
-    Parameters
+    Attributes
     ----------
     data_dir
         Base directory that holds ``in/``, ``out/``, and ``failed/``
