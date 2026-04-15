@@ -34,15 +34,22 @@ model is present raises :class:`ModelNotLoadedError`.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import cv2
+import psutil
 
 from neuropose._model import load_metrabs_model
-from neuropose.io import FramePrediction, VideoMetadata, VideoPredictions
+from neuropose.io import (
+    FramePrediction,
+    PerformanceMetrics,
+    VideoMetadata,
+    VideoPredictions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +85,23 @@ class ProcessVideoResult:
     predictions
         The validated :class:`VideoPredictions` object, containing both the
         per-frame predictions and the ``VideoMetadata`` envelope.
+    metrics
+        Timing and resource-usage metrics for the call. Always populated
+        so real-world runs carry their own measurements without the
+        caller having to opt in. ``metrics.model_load_seconds`` is
+        ``None`` when the model was injected rather than loaded via
+        :meth:`Estimator.load_model`.
     """
 
     predictions: VideoPredictions
+    metrics: PerformanceMetrics = field(
+        default_factory=lambda: PerformanceMetrics(
+            total_seconds=0.0,
+            peak_rss_mb=0.0,
+            active_device="/CPU:0",
+            tensorflow_version="unknown",
+        )
+    )
 
     @property
     def frame_count(self) -> int:
@@ -132,6 +153,11 @@ class Estimator:
         self.skeleton = skeleton
         self.default_fov_degrees = default_fov_degrees
         self._model: Any | None = model
+        # ``None`` when the model was injected via the constructor (tests,
+        # shared-model callers) — we never fake a zero load time. Set on
+        # successful ``load_model`` below so the next ``process_video`` can
+        # pass the real number through into ``PerformanceMetrics``.
+        self._model_load_seconds: float | None = None
 
     # -- model lifecycle ----------------------------------------------------
 
@@ -169,8 +195,10 @@ class Estimator:
             logger.debug("Model already loaded; skipping reload.")
             return
         logger.info("Loading MeTRAbs model (cache_dir=%s)", cache_dir)
+        start = time.perf_counter()
         self._model = load_metrabs_model(cache_dir=cache_dir)
-        logger.info("MeTRAbs model loaded.")
+        self._model_load_seconds = time.perf_counter() - start
+        logger.info("MeTRAbs model loaded in %.2f s", self._model_load_seconds)
 
     # -- inference ----------------------------------------------------------
 
@@ -223,6 +251,14 @@ class Estimator:
         if not cap.isOpened():
             raise VideoDecodeError(f"OpenCV could not open video: {video_path}")
 
+        # Start metrics collection *after* the file-not-found and
+        # decode-error paths so total_seconds reflects "work the estimator
+        # actually did" rather than setup failures the caller handles.
+        process = psutil.Process()
+        peak_rss_bytes = process.memory_info().rss
+        per_frame_latencies_ms: list[float] = []
+        overall_start = time.perf_counter()
+
         try:
             fps = float(cap.get(cv2.CAP_PROP_FPS))
             width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -246,9 +282,19 @@ class Estimator:
                     break
                 # MeTRAbs was trained on RGB images; OpenCV gives us BGR.
                 rgb_frame = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+                # Time only the model call — cv2 decode and colour
+                # conversion are not what the benchmark is asking about.
+                frame_start = time.perf_counter()
                 prediction = self._infer_frame(model, rgb_frame, fov)
+                per_frame_latencies_ms.append((time.perf_counter() - frame_start) * 1000.0)
                 frames[f"frame_{frame_index:06d}"] = prediction
                 frame_index += 1
+                # Sample RSS once per frame. Cheap (a single proc/mach
+                # syscall) and produces a monotonic peak without needing
+                # a background thread.
+                rss = process.memory_info().rss
+                if rss > peak_rss_bytes:
+                    peak_rss_bytes = rss
                 if progress is not None:
                     progress(frame_index, total_hint)
 
@@ -264,8 +310,28 @@ class Estimator:
         if frame_index == 0:
             logger.warning("Video %s contained no decodable frames.", video_path)
 
+        total_seconds = time.perf_counter() - overall_start
+        device_info = _detect_active_device()
+        metrics = PerformanceMetrics(
+            model_load_seconds=self._model_load_seconds,
+            total_seconds=total_seconds,
+            per_frame_latencies_ms=per_frame_latencies_ms,
+            peak_rss_mb=peak_rss_bytes / (1024.0 * 1024.0),
+            active_device=device_info.device,
+            tensorflow_metal_active=device_info.metal_active,
+            tensorflow_version=device_info.tf_version,
+        )
+        logger.info(
+            "Processed %d frames in %.2f s (%.1f fps, peak RSS %.0f MB, device %s)",
+            frame_index,
+            total_seconds,
+            frame_index / total_seconds if total_seconds > 0 else 0.0,
+            metrics.peak_rss_mb,
+            metrics.active_device,
+        )
+
         predictions = VideoPredictions(metadata=metadata, frames=frames)
-        return ProcessVideoResult(predictions=predictions)
+        return ProcessVideoResult(predictions=predictions, metrics=metrics)
 
     # -- internals ----------------------------------------------------------
 
@@ -306,3 +372,62 @@ def _to_nested_list(value: Any) -> Any:
     if hasattr(value, "tolist"):
         return value.tolist()
     return list(value)
+
+
+@dataclass(frozen=True)
+class _ActiveDeviceInfo:
+    """Small bundle of device info gathered for ``PerformanceMetrics``."""
+
+    device: str
+    metal_active: bool
+    tf_version: str
+
+
+def _detect_active_device() -> _ActiveDeviceInfo:
+    """Report which TF device the current process would use for inference.
+
+    Returns a synthetic "unknown" bundle if TensorFlow is not importable —
+    unit tests that inject a fake model do not have a real TF install at
+    the metrics layer, and we do not want to fail the call for that.
+
+    On Apple Silicon with the ``[metal]`` extra installed, TensorFlow
+    exposes a ``GPU`` device contributed by the ``tensorflow-metal``
+    PluggableDevice. The distinction between that and a real CUDA GPU
+    matters for :mod:`neuropose.benchmark`'s ``--compare-cpu`` flow, so
+    we surface it via ``metal_active``.
+    """
+    try:
+        import tensorflow as tf
+    except ImportError:
+        return _ActiveDeviceInfo(
+            device="unknown",
+            metal_active=False,
+            tf_version="unknown",
+        )
+
+    tf_version = getattr(tf, "__version__", "unknown")
+    try:
+        gpu_devices = tf.config.list_physical_devices("GPU")
+    except Exception:  # runtime-specific: never hard-fail metrics
+        gpu_devices = []
+
+    device = "/GPU:0" if gpu_devices else "/CPU:0"
+
+    metal_active = False
+    if gpu_devices:
+        try:
+            from importlib.metadata import PackageNotFoundError, version
+
+            try:
+                version("tensorflow-metal")
+                metal_active = True
+            except PackageNotFoundError:
+                metal_active = False
+        except Exception:
+            metal_active = False
+
+    return _ActiveDeviceInfo(
+        device=device,
+        metal_active=metal_active,
+        tf_version=tf_version,
+    )

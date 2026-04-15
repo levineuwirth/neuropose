@@ -21,6 +21,8 @@ be split into per-release sections once tagging begins.
   and `pyproject.toml` with full project metadata, classifiers, and
   URL pointers. The runtime TensorFlow dependency is pinned to
   `tensorflow>=2.16,<3.0` — see *Changed* below for the rationale.
+  `psutil>=5.9` is a runtime dependency used by the estimator's
+  always-on `PerformanceMetrics` collection to sample peak RSS.
 - `[project.optional-dependencies].analysis` extra for fastdtw, scipy,
   scikit-learn, and sktime — install via `pip install neuropose[analysis]`.
 - `[project.optional-dependencies].metal` extra pulling
@@ -82,23 +84,48 @@ be split into per-release sections once tagging begins.
 - **`neuropose.io`** — validated prediction schemas:
   `FramePrediction` (frozen), `VideoMetadata` (frame count, fps,
   width, height), `VideoPredictions` (metadata envelope + frames
-  mapping), `JobResults`, `JobStatus` enum, `JobStatusEntry` (with a
-  structured `error` field), and `StatusFile`. Load and save helpers
-  with an atomic tmp-file-then-rename pattern for every state file.
-  `load_status` is deliberately crash-resilient: missing, corrupt,
-  or non-mapping JSON returns an empty `StatusFile` rather than
-  raising.
+  mapping + optional `segmentations` field), `JobResults`,
+  `JobStatus` enum, `JobStatusEntry` (with a structured `error`
+  field), and `StatusFile`. Performance schema: frozen
+  `PerformanceMetrics` carrying per-call timings
+  (`model_load_seconds`, `total_seconds`, `per_frame_latencies_ms`),
+  `peak_rss_mb`, `active_device`, `tensorflow_metal_active`, and
+  `tensorflow_version`; `BenchmarkResult` pairing a discarded
+  `warmup_pass` with `measured_passes` and a `BenchmarkAggregate`
+  (mean / p50 / p95 / p99 per-frame latency, mean throughput, max
+  peak RSS); optional `CpuComparisonResult` nested inside
+  `BenchmarkResult` for `--compare-cpu` runs, carrying both
+  device aggregates, the throughput speedup, and the
+  maximum-element-wise `poses3d` divergence in millimetres.
+  Segmentation schema: frozen `Segment` windows (`start`, `end`,
+  `peak`), `SegmentationConfig` (with a `method` version literal,
+  e.g. `valley_to_valley_v1`), a discriminated `ExtractorSpec`
+  union over `JointAxisExtractor`, `JointPairDistanceExtractor`,
+  `JointSpeedExtractor`, and `JointAngleExtractor`, and
+  `Segmentation` pairing a config with its segments so on-disk
+  results are self-describing. Load and save helpers with an atomic
+  tmp-file-then-rename pattern for every state file.
+  `load_benchmark_result` / `save_benchmark_result` follow the same
+  atomic pattern. `load_status` is deliberately crash-resilient:
+  missing, corrupt, or non-mapping JSON returns an empty
+  `StatusFile` rather than raising. Legacy predictions files
+  without the `segmentations` field deserialize cleanly to an
+  empty mapping.
 - **`neuropose.estimator`** — `Estimator` class that streams frames
   directly from OpenCV into the model, with no intermediate write-to-
   disk-then-read-back-as-PNG round trip. Returns a typed
   `ProcessVideoResult` containing a validated `VideoPredictions`
-  object; does not touch the filesystem. Constructor accepts an
-  injected model for testability; `load_model()` delegates to
-  `neuropose._model.load_metrabs_model()`. Typed exception hierarchy:
-  `EstimatorError`, `ModelNotLoadedError`, `VideoDecodeError`.
-  Optional per-frame `progress` callback for long videos. Frame
-  identifier convention is `frame_000000` (six-digit zero-pad, no
-  extension — no file is implied).
+  object and an always-populated `PerformanceMetrics` bundle (per-
+  frame latency in ms, total wall clock, peak RSS via `psutil`,
+  active TF device string, `tensorflow-metal` detection, TF
+  version, and model load time when the caller went through
+  `load_model()`). Does not touch the filesystem. Constructor
+  accepts an injected model for testability; `load_model()`
+  delegates to `neuropose._model.load_metrabs_model()`. Typed
+  exception hierarchy: `EstimatorError`, `ModelNotLoadedError`,
+  `VideoDecodeError`. Optional per-frame `progress` callback for
+  long videos. Frame identifier convention is `frame_000000`
+  (six-digit zero-pad, no extension — no file is implied).
 - **`neuropose.visualize`** — `visualize_predictions()` for per-frame
   2D + 3D overlay rendering. `matplotlib.use("Agg")` is called inside
   the function rather than at module import, so `import neuropose.visualize`
@@ -127,6 +154,21 @@ be split into per-release sections once tagging begins.
   download was truncated). Post-load interface check for
   `detect_poses`, `per_skeleton_joint_names`, and
   `per_skeleton_joint_edges`.
+- **`neuropose.benchmark`** — multi-pass inference benchmarking for
+  a single video. `run_benchmark()` runs `process_video` N times
+  (default 5), always discards the first pass as warmup (graph
+  compilation, file-system cache warmup), and aggregates the
+  remaining `PerformanceMetrics` into a `BenchmarkAggregate` with
+  mean / p50 / p95 / p99 per-frame latency, mean throughput, and
+  max peak RSS. `capture_reference=True` additionally preserves the
+  last measured pass's `VideoPredictions` in memory so the
+  `--compare-cpu` CLI flow can diff the `poses3d` arrays between a
+  GPU and CPU run. `compute_poses3d_divergence()` computes the
+  maximum element-wise absolute difference (in millimetres) between
+  two prediction sets, skipping frames with mismatched detection
+  counts and surfacing the `frame_count_compared` so callers can
+  tell if the number is trustworthy. `format_benchmark_report()`
+  renders a human-readable summary for CLI stdout.
 - **`neuropose.analyzer`** — post-processing subpackage with lazy
   imports for the heavy dependencies:
   - `analyzer.dtw` — three DTW entry points (`dtw_all`,
@@ -139,16 +181,53 @@ be split into per-release sections once tagging begins.
     degenerate vectors), `extract_feature_statistics`
     (`FeatureStatistics` frozen dataclass), and a `find_peaks` thin
     wrapper around `scipy.signal.find_peaks`.
+  - `analyzer.segment` — repetition segmentation for trials in
+    which a subject performs the same movement several times. A
+    three-layer API: `segment_by_peaks` (pure 1D
+    valley-to-valley peak detection on a generic signal),
+    `segment_predictions` (top-level entry point taking a
+    `VideoPredictions` plus an `ExtractorSpec`, converting
+    time-based parameters to frame counts via `metadata.fps`), and
+    `slice_predictions` (split a `VideoPredictions` into one per
+    detected repetition with re-keyed frame names and a rewritten
+    `frame_count`). Ships four extractor factories —
+    `joint_axis`, `joint_pair_distance`, `joint_speed`, and
+    `joint_angle` — plus a `JOINT_NAMES` constant for the
+    berkeley_mhad_43 skeleton with a `joint_index(name)` lookup,
+    so post-processing callers can resolve `"rwri"` → integer
+    without loading the MeTRAbs SavedModel. A matching integration
+    test (`tests/integration/test_joint_names_drift.py`, marked
+    `slow`) loads the real model and asserts the constant still
+    matches, so any upstream skeleton drift fails CI.
 - **`neuropose.cli`** — Typer-based command-line interface with
-  three subcommands: `watch` (run the daemon), `process <video>`
-  (run the estimator on a single video), and `analyze <results>`
-  (stub). Global options `--config/-c`, `--verbose/-v`, `--quiet/-q`,
+  five subcommands: `watch` (run the daemon), `process <video>`
+  (run the estimator on a single video), `segment <results>`
+  (post-hoc repetition segmentation — loads a JobResults or a
+  single VideoPredictions, runs
+  `neuropose.analyzer.segment.segment_predictions` with the chosen
+  extractor and thresholds, and atomically writes the file back
+  with the new segmentation attached under `--name`),
+  `benchmark <video>` (multi-pass inference benchmark — runs
+  `--repeats N` passes with a discarded first pass and
+  `--warmup-frames M` excluded from the head of each measured
+  pass, reports aggregates to stdout, and optionally writes a
+  structured `BenchmarkResult` to `--output`. Supports
+  `--compare-cpu` which spawns a `--force-cpu` subprocess, diffs
+  the resulting `poses3d` arrays, and reports throughput speedup
+  and max divergence in mm — the missing Apple Silicon numerical
+  verification answer from `RESEARCH.md`), and
+  `analyze <results>` (stub). The `segment` subcommand accepts
+  joint specifiers as either berkeley_mhad_43 names (`lwri`,
+  `rwri`, …) or integer indices, and refuses to overwrite an
+  existing segmentation of the same name without `--force`.
+  Global options `--config/-c`, `--verbose/-v`, `--quiet/-q`,
   `--version`. Structured error handling turns expected exceptions
-  (`FileNotFoundError` on config, `ValidationError`, `AlreadyRunningError`,
-  `NotImplementedError`, `KeyboardInterrupt`) into clear stderr
-  messages and distinct exit codes (`EXIT_OK=0`, `EXIT_USAGE=2`,
-  `EXIT_PENDING=3`, `EXIT_INTERRUPTED=130`). The CLI entry point is
-  wired in `[project.scripts]` as `neuropose = "neuropose.cli:run"`.
+  (`FileNotFoundError` on config, `ValidationError`,
+  `AlreadyRunningError`, `NotImplementedError`,
+  `KeyboardInterrupt`) into clear stderr messages and distinct
+  exit codes (`EXIT_OK=0`, `EXIT_USAGE=2`, `EXIT_PENDING=3`,
+  `EXIT_INTERRUPTED=130`). The CLI entry point is wired in
+  `[project.scripts]` as `neuropose = "neuropose.cli:run"`.
 
 #### Documentation
 

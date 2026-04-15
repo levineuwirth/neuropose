@@ -94,6 +94,8 @@ nav:
       - neuropose.estimator: api/estimator.md
       - neuropose.interfacer: api/interfacer.md
       - neuropose.io: api/io.md
+      - neuropose.benchmark: api/benchmark.md
+      - neuropose.analyzer.segment: api/segment.md
       - neuropose.visualize: api/visualize.md
   - Development: development.md
   - Deployment: deployment.md

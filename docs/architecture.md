@@ -30,7 +30,8 @@ them are defined by validated pydantic schemas in
 ### estimator
 
 **Role:** pure inference library. Given a video path and a MeTRAbs
-model, produces a validated `VideoPredictions` object.
+model, produces a validated `VideoPredictions` object plus a
+`PerformanceMetrics` bundle.
 
 **Does NOT handle:** job directories, status files, polling, locking,
 signal handling, visualization, or anywhere-to-save decisions. It is a
@@ -39,10 +40,33 @@ library, not a daemon.
 The estimator streams frames directly from OpenCV into the model — no
 intermediate write-to-disk-then-read-back-as-PNG round trip like the
 previous prototype had. `process_video()` returns a typed
-`ProcessVideoResult` containing the predictions and does not touch the
-filesystem unless the caller explicitly asks it to save the result.
+`ProcessVideoResult` containing the predictions and an
+always-populated `PerformanceMetrics` (per-frame latency, peak RSS,
+total wall clock, active TF device, TF version, `tensorflow-metal`
+detection, and model load time when the caller went through
+`load_model()`). It does not touch the filesystem unless the caller
+explicitly asks it to save the result.
 
 See [`neuropose.estimator`](api/estimator.md) for the API reference.
+
+### benchmark
+
+**Role:** multi-pass inference benchmarking layered on top of the
+estimator. `run_benchmark()` calls `process_video` N times, discards
+the first pass as warmup, and aggregates the remaining
+`PerformanceMetrics` into a `BenchmarkAggregate` with distributional
+statistics (mean / p50 / p95 / p99 per-frame latency, mean
+throughput, max peak RSS).
+
+The benchmark is exposed via the `neuropose benchmark <video>` CLI
+subcommand. Its `--compare-cpu` flag spawns a subprocess with GPU
+visibility hidden (via `tf.config.set_visible_devices([], "GPU")`
+before any TF op) so a Metal-backed Apple Silicon run can be diffed
+against a CPU baseline — both the throughput speedup and the maximum
+element-wise `poses3d` divergence in millimetres are surfaced in the
+output. This is the "is `tensorflow-metal` producing correct
+numerics?" check that `RESEARCH.md`'s TensorFlow-version-compatibility
+section leaves open for v0.1.
 
 ### interfacer
 
@@ -74,16 +98,37 @@ Key guarantees:
 
 See [`neuropose.interfacer`](api/interfacer.md) for the API reference.
 
-### analyzer (pending commit 10)
+### analyzer
 
 **Role:** post-processing. Takes a `results.json` and produces analysis
-output (DTW comparisons, joint-angle features, classification). Each
-piece is a pure function of the predictions, so the module is a set of
-testable utilities rather than a daemon.
+output (DTW comparisons, joint-angle features, repetition segmentation,
+classification). Each piece is a pure function of the predictions, so
+the module is a set of testable utilities rather than a daemon.
 
-Pending the commit-10 rewrite. The previous prototype's `analyzer.py`
-was non-functional (it had imports that could not resolve and
-infinite-recursion bugs) and is not being ported forward.
+Three submodules ship today:
+
+- `analyzer.features` — `predictions_to_numpy`, normalization,
+  padding, joint angles, summary statistics, and a thin
+  `scipy.signal.find_peaks` wrapper.
+- `analyzer.dtw` — three DTW entry points (`dtw_all`, `dtw_per_joint`,
+  `dtw_relation`) over `fastdtw`, with a frozen `DTWResult` dataclass.
+  See `RESEARCH.md` for the ongoing methodology discussion.
+- `analyzer.segment` — **repetition segmentation**. Given a
+  `VideoPredictions` of a trial in which the subject performs the
+  same movement several times (e.g. lifting a cup repeatedly), the
+  module detects the individual repetitions as
+  `[start, peak, end)` windows via valley-to-valley peak detection
+  on a clinically chosen 1D signal. The signal is one of four
+  extractor variants (`joint_axis`, `joint_pair_distance`,
+  `joint_speed`, `joint_angle`), and the produced `Segmentation`
+  carries its own `SegmentationConfig` so the on-disk
+  representation is self-describing. Segmentation is exposed both
+  as a Python API and as the `neuropose segment` CLI subcommand,
+  which runs post-hoc against an existing `results.json` — the
+  daemon stays a pure inference daemon.
+
+Classification wrappers on top of `sktime` are deliberately not
+shipped yet; see `RESEARCH.md` for the plan.
 
 ## Data flow
 

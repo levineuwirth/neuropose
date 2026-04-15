@@ -55,6 +55,12 @@ dependencies = [
   "numpy>=1.26",
   "opencv-python-headless>=4.9",
   "matplotlib>=3.8",
+  # psutil powers the peak-RSS and process-memory readings captured by
+  # PerformanceMetrics in neuropose.io. It is a cross-platform pure-Python
+  # wrapper around /proc (Linux), mach (macOS), and Win32 APIs with a
+  # small C extension; brought in at runtime because metrics are always
+  # collected, not an optional feature.
+  "psutil>=5.9",
   "tensorflow>=2.16,<3.0",
   "tensorflow-hub>=0.16",
 ]

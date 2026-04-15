@@ -14,8 +14,10 @@ robust.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
+import numpy as np
 import pytest
 import yaml
 from typer.testing import CliRunner
@@ -27,6 +29,15 @@ from neuropose.cli import (
     EXIT_PENDING,
     EXIT_USAGE,
     app,
+)
+from neuropose.io import (
+    JobResults,
+    VideoPredictions,
+    load_benchmark_result,
+    load_job_results,
+    load_video_predictions,
+    save_job_results,
+    save_video_predictions,
 )
 
 
@@ -57,9 +68,7 @@ def stub_metrabs_loader(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def fake_loader(cache_dir: Path | None = None) -> object:
         del cache_dir
-        raise NotImplementedError(
-            "pending commit 11: MeTRAbs loader stubbed for unit testing"
-        )
+        raise NotImplementedError("pending commit 11: MeTRAbs loader stubbed for unit testing")
 
     monkeypatch.setattr("neuropose.estimator.load_metrabs_model", fake_loader)
 
@@ -83,6 +92,8 @@ class TestTopLevelOptions:
         assert result.exit_code in (EXIT_OK, EXIT_USAGE)
         assert "watch" in result.output
         assert "process" in result.output
+        assert "segment" in result.output
+        assert "benchmark" in result.output
         assert "analyze" in result.output
 
     def test_help_flag(self, runner: CliRunner) -> None:
@@ -91,7 +102,7 @@ class TestTopLevelOptions:
         assert "NeuroPose" in result.output
 
     def test_subcommand_help(self, runner: CliRunner) -> None:
-        for subcommand in ("watch", "process", "analyze"):
+        for subcommand in ("watch", "process", "segment", "benchmark", "analyze"):
             result = runner.invoke(app, [subcommand, "--help"])
             assert result.exit_code == EXIT_OK, f"{subcommand} --help failed"
 
@@ -202,6 +213,393 @@ class TestProcess:
         result = runner.invoke(app, ["process", str(synthetic_video)])
         assert result.exit_code == EXIT_PENDING
         assert "commit 11" in result.output
+
+
+# ---------------------------------------------------------------------------
+# segment
+# ---------------------------------------------------------------------------
+
+
+_NUM_JOINTS = 43
+
+
+def _triple_hump_predictions(joint_name: str = "lwri") -> VideoPredictions:
+    """Build a 300-frame synthetic VideoPredictions with three clear humps."""
+    from neuropose.analyzer.segment import JOINT_INDEX
+
+    joint = JOINT_INDEX[joint_name]
+    t = np.linspace(0.0, 6.0 * math.pi, 300)
+    signal = np.maximum(0.0, np.sin(t)) ** 2 * 1000.0
+
+    frames = {}
+    for i, value in enumerate(signal):
+        poses = [[[0.0, 0.0, 0.0] for _ in range(_NUM_JOINTS)]]
+        poses[0][joint][1] = float(value)
+        frames[f"frame_{i:06d}"] = {
+            "boxes": [[0.0, 0.0, 1.0, 1.0, 0.9]],
+            "poses3d": poses,
+            "poses2d": [[[0.0, 0.0]] * _NUM_JOINTS],
+        }
+    return VideoPredictions.model_validate(
+        {
+            "metadata": {
+                "frame_count": 300,
+                "fps": 30.0,
+                "width": 640,
+                "height": 480,
+            },
+            "frames": frames,
+        }
+    )
+
+
+class TestSegmentSubcommand:
+    def test_segment_job_results_in_place(self, runner: CliRunner, tmp_path: Path) -> None:
+        path = tmp_path / "results.json"
+        save_job_results(
+            path,
+            JobResults(root={"trial_01.mp4": _triple_hump_predictions()}),
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "segment",
+                str(path),
+                "--name",
+                "cup_lift",
+                "--extractor",
+                "joint_axis",
+                "--joint",
+                "lwri",
+                "--axis",
+                "1",
+                "--min-prominence",
+                "50",
+            ],
+        )
+
+        assert result.exit_code == EXIT_OK, result.output
+        loaded = load_job_results(path)
+        vp = loaded["trial_01.mp4"]
+        assert "cup_lift" in vp.segmentations
+        assert len(vp.segmentations["cup_lift"].segments) == 3
+
+    def test_segment_single_predictions_file(self, runner: CliRunner, tmp_path: Path) -> None:
+        path = tmp_path / "video_predictions.json"
+        save_video_predictions(path, _triple_hump_predictions())
+
+        result = runner.invoke(
+            app,
+            [
+                "segment",
+                str(path),
+                "--name",
+                "cup_lift",
+                "--extractor",
+                "joint_pair_distance",
+                "--joints",
+                "lwri,rwri",
+                "--min-prominence",
+                "50",
+            ],
+        )
+        # With both wrists at origin except for lwri's y-coordinate, the
+        # pair distance is exactly the lwri.y signal, so the three humps
+        # are detected the same way as the joint_axis case.
+        assert result.exit_code == EXIT_OK, result.output
+        loaded = load_video_predictions(path)
+        assert "cup_lift" in loaded.segmentations
+        assert len(loaded.segmentations["cup_lift"].segments) == 3
+
+    def test_segment_writes_to_output_option(self, runner: CliRunner, tmp_path: Path) -> None:
+        src = tmp_path / "src.json"
+        dst = tmp_path / "dst.json"
+        save_job_results(src, JobResults(root={"trial_01.mp4": _triple_hump_predictions()}))
+
+        result = runner.invoke(
+            app,
+            [
+                "segment",
+                str(src),
+                "--name",
+                "cup_lift",
+                "--extractor",
+                "joint_axis",
+                "--joint",
+                "15",  # integer form
+                "--axis",
+                "1",
+                "--min-prominence",
+                "50",
+                "--output",
+                str(dst),
+            ],
+        )
+
+        assert result.exit_code == EXIT_OK, result.output
+        assert dst.exists()
+        # Source must be left untouched when --output is given.
+        src_loaded = load_job_results(src)
+        assert src_loaded["trial_01.mp4"].segmentations == {}
+        dst_loaded = load_job_results(dst)
+        assert "cup_lift" in dst_loaded["trial_01.mp4"].segmentations
+
+    def test_segment_rejects_collision_without_force(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "results.json"
+        save_job_results(path, JobResults(root={"trial_01.mp4": _triple_hump_predictions()}))
+        base_args = [
+            "segment",
+            str(path),
+            "--name",
+            "cup_lift",
+            "--extractor",
+            "joint_axis",
+            "--joint",
+            "lwri",
+            "--axis",
+            "1",
+            "--min-prominence",
+            "50",
+        ]
+
+        first = runner.invoke(app, base_args)
+        assert first.exit_code == EXIT_OK, first.output
+
+        collision = runner.invoke(app, base_args)
+        assert collision.exit_code == EXIT_USAGE
+        assert "force" in collision.output.lower()
+
+    def test_segment_force_overwrites(self, runner: CliRunner, tmp_path: Path) -> None:
+        path = tmp_path / "results.json"
+        save_job_results(path, JobResults(root={"trial_01.mp4": _triple_hump_predictions()}))
+        args = [
+            "segment",
+            str(path),
+            "--name",
+            "cup_lift",
+            "--extractor",
+            "joint_axis",
+            "--joint",
+            "lwri",
+            "--axis",
+            "1",
+            "--min-prominence",
+            "50",
+        ]
+        runner.invoke(app, args)
+        result = runner.invoke(app, [*args, "--force"])
+        assert result.exit_code == EXIT_OK, result.output
+
+    def test_segment_unknown_joint_name_is_usage_error(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "results.json"
+        save_job_results(path, JobResults(root={"trial_01.mp4": _triple_hump_predictions()}))
+
+        result = runner.invoke(
+            app,
+            [
+                "segment",
+                str(path),
+                "--name",
+                "cup_lift",
+                "--extractor",
+                "joint_axis",
+                "--joint",
+                "elbow",  # deliberately not a valid berkeley_mhad_43 name
+                "--axis",
+                "1",
+            ],
+        )
+
+        assert result.exit_code == EXIT_USAGE
+        assert "unknown joint" in result.output.lower()
+
+    def test_segment_missing_required_flag_is_usage_error(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "results.json"
+        save_job_results(path, JobResults(root={"trial_01.mp4": _triple_hump_predictions()}))
+
+        # joint_axis without --joint
+        result = runner.invoke(
+            app,
+            [
+                "segment",
+                str(path),
+                "--name",
+                "cup_lift",
+                "--extractor",
+                "joint_axis",
+                "--axis",
+                "1",
+            ],
+        )
+        assert result.exit_code == EXIT_USAGE
+
+    def test_segment_unreadable_file_is_usage_error(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "garbage.json"
+        path.write_text("{ this is not valid json")
+        result = runner.invoke(
+            app,
+            [
+                "segment",
+                str(path),
+                "--name",
+                "cup_lift",
+                "--extractor",
+                "joint_axis",
+                "--joint",
+                "lwri",
+                "--axis",
+                "1",
+            ],
+        )
+        assert result.exit_code == EXIT_USAGE
+
+    def test_segment_preserves_pose_values(self, runner: CliRunner, tmp_path: Path) -> None:
+        """Segmentation only touches ``segmentations``; pose data is untouched."""
+        path = tmp_path / "results.json"
+        original = _triple_hump_predictions()
+        save_job_results(path, JobResults(root={"trial_01.mp4": original}))
+
+        result = runner.invoke(
+            app,
+            [
+                "segment",
+                str(path),
+                "--name",
+                "cup_lift",
+                "--extractor",
+                "joint_axis",
+                "--joint",
+                "lwri",
+                "--axis",
+                "1",
+                "--min-prominence",
+                "50",
+            ],
+        )
+        assert result.exit_code == EXIT_OK, result.output
+
+        loaded = load_job_results(path)
+        lv = loaded["trial_01.mp4"]
+        assert lv.frame_names() == original.frame_names()
+        for name in original.frame_names():
+            assert lv[name].poses3d == original[name].poses3d
+
+
+# ---------------------------------------------------------------------------
+# benchmark
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def stub_estimator_with_metrics(monkeypatch: pytest.MonkeyPatch):
+    """Monkeypatch the benchmark's Estimator path to use a fake model.
+
+    The CLI's ``benchmark`` subcommand instantiates an :class:`Estimator`
+    and calls ``load_model``. We replace ``load_metrabs_model`` with a
+    fake that returns a deterministic stand-in so the CLI's
+    ``load_model`` succeeds without downloading or touching TF. The
+    estimator's own metrics-collection path still runs, so the CLI
+    exercise is end-to-end except for the real model.
+    """
+    import numpy as np
+
+    class RecordingFake:
+        def detect_poses(self, image, **kwargs):
+            del image, kwargs
+            return {
+                "boxes": np.array([[0.0, 0.0, 1.0, 1.0, 0.9]]),
+                "poses3d": np.array([[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]]),
+                "poses2d": np.array([[[0.0, 0.0], [1.0, 1.0]]]),
+            }
+
+    def fake_loader(cache_dir: Path | None = None) -> object:
+        del cache_dir
+        return RecordingFake()
+
+    monkeypatch.setattr("neuropose.estimator.load_metrabs_model", fake_loader)
+
+
+class TestBenchmarkSubcommand:
+    def test_benchmark_smoke(
+        self,
+        runner: CliRunner,
+        synthetic_video: Path,
+        tmp_path: Path,
+        stub_estimator_with_metrics,
+    ) -> None:
+        del stub_estimator_with_metrics
+        output = tmp_path / "bench.json"
+        result = runner.invoke(
+            app,
+            [
+                "benchmark",
+                str(synthetic_video),
+                "--repeats",
+                "3",
+                "--warmup-frames",
+                "0",
+                "--output",
+                str(output),
+            ],
+        )
+        assert result.exit_code == EXIT_OK, result.output
+        # Human-readable report must hit stdout.
+        assert "Benchmark:" in result.output
+        assert "Throughput:" in result.output
+        # JSON output file must exist and validate against the schema.
+        assert output.exists()
+        loaded = load_benchmark_result(output)
+        assert loaded.video_name == synthetic_video.name
+        assert loaded.repeats == 3
+        assert len(loaded.measured_passes) == 2
+        assert loaded.cpu_comparison is None
+
+    def test_benchmark_rejects_repeats_below_two(
+        self,
+        runner: CliRunner,
+        synthetic_video: Path,
+        stub_estimator_with_metrics,
+    ) -> None:
+        del stub_estimator_with_metrics
+        result = runner.invoke(app, ["benchmark", str(synthetic_video), "--repeats", "1"])
+        # Typer's min=2 validation catches this before our code runs.
+        assert result.exit_code != EXIT_OK
+
+    def test_benchmark_missing_video_is_usage_error(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+    ) -> None:
+        result = runner.invoke(app, ["benchmark", str(tmp_path / "nope.mp4")])
+        assert result.exit_code == EXIT_USAGE
+
+    def test_benchmark_force_cpu_and_compare_cpu_are_mutually_exclusive(
+        self,
+        runner: CliRunner,
+        synthetic_video: Path,
+        stub_estimator_with_metrics,
+    ) -> None:
+        del stub_estimator_with_metrics
+        result = runner.invoke(
+            app,
+            [
+                "benchmark",
+                str(synthetic_video),
+                "--compare-cpu",
+                "--force-cpu",
+            ],
+        )
+        assert result.exit_code == EXIT_USAGE
+        assert "mutually exclusive" in result.output
 
 
 # ---------------------------------------------------------------------------

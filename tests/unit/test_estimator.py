@@ -19,7 +19,7 @@ from neuropose.estimator import (
     ProcessVideoResult,
     VideoDecodeError,
 )
-from neuropose.io import FramePrediction, VideoPredictions
+from neuropose.io import FramePrediction, PerformanceMetrics, VideoPredictions
 
 
 class TestConstruction:
@@ -197,6 +197,119 @@ class TestProcessVideo:
         estimator.process_video(synthetic_video, fov_degrees=40.0)
         assert all(fov == pytest.approx(40.0) for fov in fov_seen)
         assert len(fov_seen) == 5
+
+
+class TestPerformanceMetrics:
+    def test_metrics_attached_to_result(
+        self,
+        synthetic_video: Path,
+        fake_metrabs_model,
+    ) -> None:
+        estimator = Estimator(model=fake_metrabs_model)
+        result = estimator.process_video(synthetic_video)
+        assert isinstance(result.metrics, PerformanceMetrics)
+
+    def test_per_frame_latencies_length_matches_frames(
+        self,
+        synthetic_video: Path,
+        fake_metrabs_model,
+    ) -> None:
+        estimator = Estimator(model=fake_metrabs_model)
+        result = estimator.process_video(synthetic_video)
+        assert len(result.metrics.per_frame_latencies_ms) == result.frame_count
+
+    def test_all_latencies_are_non_negative(
+        self,
+        synthetic_video: Path,
+        fake_metrabs_model,
+    ) -> None:
+        estimator = Estimator(model=fake_metrabs_model)
+        result = estimator.process_video(synthetic_video)
+        assert all(v >= 0.0 for v in result.metrics.per_frame_latencies_ms)
+
+    def test_total_seconds_is_positive(
+        self,
+        synthetic_video: Path,
+        fake_metrabs_model,
+    ) -> None:
+        estimator = Estimator(model=fake_metrabs_model)
+        result = estimator.process_video(synthetic_video)
+        assert result.metrics.total_seconds > 0.0
+
+    def test_peak_rss_is_positive(
+        self,
+        synthetic_video: Path,
+        fake_metrabs_model,
+    ) -> None:
+        estimator = Estimator(model=fake_metrabs_model)
+        result = estimator.process_video(synthetic_video)
+        # psutil always reports at least a few MB of RSS for a running
+        # Python process; the exact number varies by platform.
+        assert result.metrics.peak_rss_mb > 0.0
+
+    def test_model_load_seconds_none_when_injected(
+        self,
+        synthetic_video: Path,
+        fake_metrabs_model,
+    ) -> None:
+        estimator = Estimator(model=fake_metrabs_model)
+        result = estimator.process_video(synthetic_video)
+        assert result.metrics.model_load_seconds is None
+
+    def test_model_load_seconds_set_after_load(
+        self,
+        synthetic_video: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``load_model`` should set ``model_load_seconds`` on the next call.
+
+        We stub the loader to return a recording fake model, time how long
+        the estimator's ``load_model`` takes, and verify the number ends
+        up on the metrics object.
+        """
+        import numpy as np
+
+        class Recorder:
+            def detect_poses(self, image, **kwargs):
+                del image, kwargs
+                return {
+                    "boxes": np.array([[0.0, 0.0, 32.0, 32.0, 0.9]]),
+                    "poses3d": np.array([[[0.0, 0.0, 0.0]]]),
+                    "poses2d": np.array([[[0.0, 0.0]]]),
+                }
+
+        def fake_loader(cache_dir: Path | None = None) -> object:
+            del cache_dir
+            return Recorder()
+
+        monkeypatch.setattr("neuropose.estimator.load_metrabs_model", fake_loader)
+        estimator = Estimator()
+        estimator.load_model()
+        result = estimator.process_video(synthetic_video)
+        assert result.metrics.model_load_seconds is not None
+        assert result.metrics.model_load_seconds >= 0.0
+
+    def test_active_device_string_populated(
+        self,
+        synthetic_video: Path,
+        fake_metrabs_model,
+    ) -> None:
+        estimator = Estimator(model=fake_metrabs_model)
+        result = estimator.process_video(synthetic_video)
+        # The exact string depends on the runner's TF install, but it
+        # must be one of the two canonical forms.
+        assert result.metrics.active_device in {"/CPU:0", "/GPU:0", "unknown"}
+
+    def test_tensorflow_version_populated(
+        self,
+        synthetic_video: Path,
+        fake_metrabs_model,
+    ) -> None:
+        estimator = Estimator(model=fake_metrabs_model)
+        result = estimator.process_video(synthetic_video)
+        # TF is in the dev deps so the version should always be a real
+        # string, not the "unknown" fallback.
+        assert result.metrics.tensorflow_version not in {"", "unknown"}
 
 
 class TestErrors:

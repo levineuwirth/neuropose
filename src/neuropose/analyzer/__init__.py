@@ -42,8 +42,23 @@ from neuropose.analyzer.features import (
     pad_sequences,
     predictions_to_numpy,
 )
+from neuropose.analyzer.segment import (
+    JOINT_INDEX,
+    JOINT_NAMES,
+    extract_signal,
+    joint_angle,
+    joint_axis,
+    joint_index,
+    joint_pair_distance,
+    joint_speed,
+    segment_by_peaks,
+    segment_predictions,
+    slice_predictions,
+)
 
 __all__ = [
+    "JOINT_INDEX",
+    "JOINT_NAMES",
     "DTWResult",
     "FeatureStatistics",
     "dtw_all",
@@ -51,8 +66,17 @@ __all__ = [
     "dtw_relation",
     "extract_feature_statistics",
     "extract_joint_angles",
+    "extract_signal",
     "find_peaks",
+    "joint_angle",
+    "joint_axis",
+    "joint_index",
+    "joint_pair_distance",
+    "joint_speed",
     "normalize_pose_sequence",
     "pad_sequences",
     "predictions_to_numpy",
+    "segment_by_peaks",
+    "segment_predictions",
+    "slice_predictions",
 ]
