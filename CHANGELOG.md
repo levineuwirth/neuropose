@@ -86,7 +86,13 @@ be split into per-release sections once tagging begins.
   width, height), `VideoPredictions` (metadata envelope + frames
   mapping + optional `segmentations` field), `JobResults`,
   `JobStatus` enum, `JobStatusEntry` (with a structured `error`
-  field), and `StatusFile`. Performance schema: frozen
+  field plus optional live-progress fields — `current_video`,
+  `frames_processed`, `frames_total`, `videos_completed`,
+  `videos_total`, `percent_complete`, `last_update` — populated by
+  the interfacer during inference and consumed by
+  `neuropose.monitor`), and `StatusFile`. Legacy status files
+  written before the progress fields existed still load cleanly
+  because every new field is optional with a `None` default. Performance schema: frozen
   `PerformanceMetrics` carrying per-call timings
   (`model_load_seconds`, `total_seconds`, `per_frame_latencies_ms`),
   `peak_rss_mb`, `active_device`, `tensorflow_metal_active`, and
@@ -154,6 +160,48 @@ be split into per-release sections once tagging begins.
   download was truncated). Post-load interface check for
   `detect_poses`, `per_skeleton_joint_names`, and
   `per_skeleton_joint_edges`.
+- **`neuropose.monitor`** — localhost HTTP status dashboard. A small
+  `http.server`-based HTTP server (pure stdlib, zero new runtime
+  dependencies) that serves a plain HTML page at `GET /` with an
+  auto-refresh meta tag, one row per tracked job, a
+  `<progress>` bar, and a stale-entry warning badge for
+  `processing` jobs whose `last_update` has not ticked in 60 s.
+  `GET /status.json` returns the raw validated `StatusFile` as JSON
+  for `curl`/scripted pipelines; `?job=<name>` filters to a single
+  entry. `GET /health` is a simple liveness probe. Binds to
+  `127.0.0.1:8765` by default — loopback-only, with an explicit
+  `--host` override required to expose externally. Every request
+  re-reads `status.json`, so the monitor has no in-memory cache, no
+  sync protocol with the daemon, and stays useful even if the
+  daemon is down (last-known state surfaced with the stale badge).
+- **Progress checkpointing in the interfacer.** `Interfacer` now
+  updates the currently-running job's `JobStatusEntry` every
+  `settings.status_checkpoint_every_frames` frames (default 30, a
+  new `Settings` field) during inference via the estimator's
+  `progress` callback. Each checkpoint rewrites `status.json`
+  atomically through the existing `save_status` helper; writes are
+  best-effort and I/O failures are logged without interrupting
+  inference. `_run_job_inner` seeds a "videos_total=N" checkpoint
+  before calling the estimator so the monitor shows the job's
+  scope from the first poll. Checkpoint cadence is knob-exposed for
+  operators who want to tune the smoothness-vs-write-rate trade-off.
+- **`neuropose.ingest`** — zip-archive intake utility. `ingest_zip()`
+  extracts a zip of videos into one job directory per video under
+  `$data_dir/in/`, with validation-before-write (path-traversal and
+  absolute-path members rejected, oversize archives rejected at the
+  20 GB-uncompressed cap), zip-internal and external collision
+  detection reported in one shot, non-video members silently
+  skipped (`.DS_Store`, `README.md`, etc.), and per-job atomic
+  placement via a staging directory + `os.rename`. Nested paths are
+  flattened into job names by joining components with underscores
+  and sanitising unsafe characters — `patient_001/trial_01.mp4`
+  becomes job `patient_001_trial_01`, preserving disambiguation
+  against a sibling `patient_002/trial_01.mp4`. Typed exception
+  hierarchy: `IngestError`, `ArchiveInvalidError`,
+  `ArchiveEmptyError`, `ArchiveTooLargeError`, `JobCollisionError`
+  (with a `.collisions` list of offending names). The running
+  daemon needs no changes — ingested job dirs are picked up on the
+  next poll.
 - **`neuropose.benchmark`** — multi-pass inference benchmarking for
   a single video. `run_benchmark()` runs `process_video` N times
   (default 5), always discards the first pass as warmup (graph
@@ -200,10 +248,19 @@ be split into per-release sections once tagging begins.
     `slow`) loads the real model and asserts the constant still
     matches, so any upstream skeleton drift fails CI.
 - **`neuropose.cli`** — Typer-based command-line interface with
-  five subcommands: `watch` (run the daemon), `process <video>`
-  (run the estimator on a single video), `segment <results>`
-  (post-hoc repetition segmentation — loads a JobResults or a
-  single VideoPredictions, runs
+  seven subcommands: `watch` (run the daemon), `process <video>`
+  (run the estimator on a single video), `ingest <archive>` (unzip
+  a video archive into per-video job directories under
+  `$data_dir/in/` with validation-before-write and atomic
+  placement; `--force` overwrites collisions, otherwise the whole
+  operation refuses if any target name already exists),
+  `serve` (start the localhost HTTP monitor at `127.0.0.1:8765`
+  by default — `--host` and `--port` are the two overrides;
+  KeyboardInterrupt exits with the standard shell-interruption
+  code and an `OSError` at bind time is translated to a clean
+  usage error with the bind target in the message),
+  `segment <results>` (post-hoc repetition segmentation — loads a
+  JobResults or a single VideoPredictions, runs
   `neuropose.analyzer.segment.segment_predictions` with the chosen
   extractor and thresholds, and atomically writes the file back
   with the new segmentation attached under `--name`),

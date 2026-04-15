@@ -78,6 +78,19 @@ class Settings(BaseSettings):
     poll_interval_seconds: int = Field(default=10, ge=1)
     device: str = Field(default="/CPU:0")
     default_fov_degrees: float = Field(default=55.0, gt=0.0, lt=180.0)
+    status_checkpoint_every_frames: int = Field(
+        default=30,
+        ge=1,
+        description=(
+            "Write the in-progress job's status entry back to status.json "
+            "every N frames during inference. Powers the live progress "
+            "bar in neuropose.monitor. Lower values produce smoother "
+            "progress at the cost of more atomic-rename writes; higher "
+            "values are cheaper but leave collaborators staring at a "
+            "stale percentage for longer. The default (30) is a smooth "
+            "update every ~3 s at 10 fps inference."
+        ),
+    )
 
     @field_validator("device")
     @classmethod

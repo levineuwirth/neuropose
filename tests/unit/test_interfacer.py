@@ -45,8 +45,14 @@ class _RaisingEstimator:
     def load_model(self, cache_dir: Path | None = None) -> None:
         del cache_dir
 
-    def process_video(self, video_path: Path) -> Any:
-        del video_path
+    def process_video(
+        self,
+        video_path: Path,
+        *,
+        progress: Any = None,
+        **_: Any,
+    ) -> Any:
+        del video_path, progress
         raise self._exc
 
 
@@ -247,6 +253,142 @@ class TestProcessJobSuccess:
 
         assert (settings.input_dir / "job_a").exists()
         assert not (settings.failed_dir / "job_a").exists()
+
+
+class TestProgressCheckpointing:
+    def test_completed_entry_has_full_progress(
+        self,
+        tmp_path: Path,
+        synthetic_video: Path,
+        fake_metrabs_model,
+    ) -> None:
+        settings = _make_settings(tmp_path)
+        _prepare_job(settings, "job_a", videos=[synthetic_video])
+        interfacer = Interfacer(settings, Estimator(model=fake_metrabs_model))
+
+        entry = interfacer.process_job("job_a")
+
+        assert entry.percent_complete == 100.0
+        assert entry.videos_completed == 1
+        assert entry.videos_total == 1
+        assert entry.last_update is not None
+
+    def test_checkpoints_persist_to_status_file(
+        self,
+        tmp_path: Path,
+        synthetic_video: Path,
+        fake_metrabs_model,
+    ) -> None:
+        # Force a low checkpoint cadence so the 5-frame synthetic video
+        # actually triggers the callback a few times. Without this the
+        # default cadence of 30 would not fire on a 5-frame video.
+        settings = Settings(
+            data_dir=tmp_path / "jobs",
+            model_cache_dir=tmp_path / "models",
+            status_checkpoint_every_frames=1,
+        )
+        _prepare_job(settings, "job_a", videos=[synthetic_video])
+        interfacer = Interfacer(settings, Estimator(model=fake_metrabs_model))
+
+        interfacer.process_job("job_a")
+
+        status = load_status(settings.status_file)
+        entry = status.root["job_a"]
+        # Final entry is COMPLETED with full progress.
+        assert entry.status == JobStatus.COMPLETED
+        assert entry.percent_complete == 100.0
+
+    def test_seed_checkpoint_sets_videos_total_before_first_callback(
+        self,
+        tmp_path: Path,
+        synthetic_video: Path,
+        fake_metrabs_model,
+    ) -> None:
+        """The seeded checkpoint should land even if no frame callbacks fire.
+
+        We wrap the real estimator so its ``process_video`` records
+        the ``status.json`` state at the moment it is called — after
+        the seed checkpoint but before any frame-based callbacks run —
+        and assert that ``videos_total`` and ``current_video`` were
+        already written by the seed.
+        """
+        settings = _make_settings(tmp_path)
+        _prepare_job(settings, "job_a", videos=[synthetic_video])
+
+        seen_entries: list[JobStatusEntry] = []
+        real_estimator = Estimator(model=fake_metrabs_model)
+
+        class RecordingEstimator:
+            is_model_loaded = True
+
+            def load_model(self, cache_dir: Path | None = None) -> None:
+                del cache_dir
+
+            def process_video(
+                self,
+                video_path: Path,
+                *,
+                progress: Any = None,
+                **_: Any,
+            ) -> Any:
+                status = load_status(settings.status_file)
+                seen_entries.append(status.root["job_a"])
+                return real_estimator.process_video(video_path, progress=progress)
+
+        interfacer = Interfacer(settings, RecordingEstimator())  # type: ignore[arg-type]
+        interfacer.process_job("job_a")
+
+        assert len(seen_entries) == 1
+        seeded = seen_entries[0]
+        assert seeded.videos_total == 1
+        assert seeded.videos_completed == 0
+        assert seeded.current_video == synthetic_video.name
+
+    def test_checkpoint_progress_swallows_io_errors(
+        self,
+        tmp_path: Path,
+        fake_metrabs_model,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``_checkpoint_progress`` is best-effort — must not raise.
+
+        We call it directly and patch the underlying ``save_status``
+        to raise, then assert the call returns normally. Testing the
+        helper in isolation is more robust than trying to inject a
+        failure at the exact call-ordinal during a full ``process_job``
+        run.
+        """
+        settings = _make_settings(tmp_path)
+        settings.ensure_dirs()
+        # Seed a PROCESSING entry so _checkpoint_progress has something
+        # to update.
+        status = StatusFile(
+            root={
+                "job_a": JobStatusEntry(
+                    status=JobStatus.PROCESSING,
+                    started_at=datetime.now(UTC),
+                )
+            }
+        )
+        save_status(settings.status_file, status)
+        interfacer = Interfacer(settings, Estimator(model=fake_metrabs_model))
+
+        def broken_save(path: Path, status: StatusFile) -> None:
+            raise OSError("disk full, simulated")
+
+        monkeypatch.setattr("neuropose.interfacer.save_status", broken_save)
+
+        # The helper must not raise — the caller (inference loop)
+        # continues making forward progress even if the write fails.
+        interfacer._checkpoint_progress(
+            "job_a",
+            started_at=datetime.now(UTC),
+            current_video="v.mp4",
+            frames_processed=10,
+            frames_total=100,
+            videos_completed=0,
+            videos_total=1,
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -92,6 +92,8 @@ class TestTopLevelOptions:
         assert result.exit_code in (EXIT_OK, EXIT_USAGE)
         assert "watch" in result.output
         assert "process" in result.output
+        assert "ingest" in result.output
+        assert "serve" in result.output
         assert "segment" in result.output
         assert "benchmark" in result.output
         assert "analyze" in result.output
@@ -102,7 +104,15 @@ class TestTopLevelOptions:
         assert "NeuroPose" in result.output
 
     def test_subcommand_help(self, runner: CliRunner) -> None:
-        for subcommand in ("watch", "process", "segment", "benchmark", "analyze"):
+        for subcommand in (
+            "watch",
+            "process",
+            "ingest",
+            "serve",
+            "segment",
+            "benchmark",
+            "analyze",
+        ):
             result = runner.invoke(app, [subcommand, "--help"])
             assert result.exit_code == EXIT_OK, f"{subcommand} --help failed"
 
@@ -213,6 +223,158 @@ class TestProcess:
         result = runner.invoke(app, ["process", str(synthetic_video)])
         assert result.exit_code == EXIT_PENDING
         assert "commit 11" in result.output
+
+
+# ---------------------------------------------------------------------------
+# ingest
+# ---------------------------------------------------------------------------
+
+
+def _write_zip_for_cli(path: Path, members: dict[str, bytes]) -> Path:
+    """Build a zip fixture for the CLI ingest tests."""
+    import zipfile
+
+    with zipfile.ZipFile(path, "w") as z:
+        for name, data in members.items():
+            z.writestr(name, data)
+    return path
+
+
+class TestIngestSubcommand:
+    def test_ingest_happy_path_creates_job_dirs(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        xdg_home: Path,
+    ) -> None:
+        archive = _write_zip_for_cli(
+            tmp_path / "session.zip",
+            {"clip_01.mp4": b"video one", "clip_02.mp4": b"video two"},
+        )
+        result = runner.invoke(app, ["ingest", str(archive)])
+        assert result.exit_code == EXIT_OK, result.output
+        assert "ingested 2 job(s)" in result.output
+        # Default Settings.data_dir is $XDG_DATA_HOME/neuropose/jobs, and
+        # input_dir = data_dir/in.
+        input_dir = xdg_home / "neuropose" / "jobs" / "in"
+        assert (input_dir / "clip_01" / "clip_01.mp4").read_bytes() == b"video one"
+        assert (input_dir / "clip_02" / "clip_02.mp4").read_bytes() == b"video two"
+
+    def test_ingest_reports_skipped_non_videos(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+    ) -> None:
+        archive = _write_zip_for_cli(
+            tmp_path / "a.zip",
+            {"clip.mp4": b"v", "README.md": b"readme"},
+        )
+        result = runner.invoke(app, ["ingest", str(archive)])
+        assert result.exit_code == EXIT_OK, result.output
+        assert "1 non-video member(s) skipped" in result.output
+
+    def test_ingest_missing_archive_is_usage_error(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+    ) -> None:
+        result = runner.invoke(app, ["ingest", str(tmp_path / "nope.zip")])
+        assert result.exit_code == EXIT_USAGE
+
+    def test_ingest_empty_archive_is_usage_error(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+    ) -> None:
+        archive = _write_zip_for_cli(tmp_path / "empty.zip", {})
+        result = runner.invoke(app, ["ingest", str(archive)])
+        assert result.exit_code == EXIT_USAGE
+        assert "no video files" in result.output.lower()
+
+    def test_ingest_collision_without_force_is_usage_error(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        xdg_home: Path,
+    ) -> None:
+        archive = _write_zip_for_cli(tmp_path / "a.zip", {"clip.mp4": b"v"})
+        # Pre-create the colliding job directory so the first run has
+        # something to collide with.
+        runner.invoke(app, ["ingest", str(archive)])
+        result = runner.invoke(app, ["ingest", str(archive)])
+        assert result.exit_code == EXIT_USAGE
+        assert "already exist" in result.output.lower()
+        assert "--force" in result.output
+
+    def test_ingest_force_overwrites(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        xdg_home: Path,
+    ) -> None:
+        archive = _write_zip_for_cli(tmp_path / "a.zip", {"clip.mp4": b"original"})
+        first = runner.invoke(app, ["ingest", str(archive)])
+        assert first.exit_code == EXIT_OK, first.output
+        # Build a new archive with the same job name but different bytes.
+        archive2 = _write_zip_for_cli(tmp_path / "b.zip", {"clip.mp4": b"overwritten"})
+        second = runner.invoke(app, ["ingest", str(archive2), "--force"])
+        assert second.exit_code == EXIT_OK, second.output
+        input_dir = xdg_home / "neuropose" / "jobs" / "in"
+        assert (input_dir / "clip" / "clip.mp4").read_bytes() == b"overwritten"
+
+    def test_ingest_traversal_rejected_as_usage_error(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+    ) -> None:
+        archive = _write_zip_for_cli(tmp_path / "a.zip", {"../escape.mp4": b"v"})
+        result = runner.invoke(app, ["ingest", str(archive)])
+        assert result.exit_code == EXIT_USAGE
+        assert "traversal" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# serve
+# ---------------------------------------------------------------------------
+
+
+class TestServeSubcommand:
+    def test_serve_exits_cleanly_on_keyboard_interrupt(
+        self,
+        runner: CliRunner,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``neuropose serve`` should translate Ctrl-C into EXIT_INTERRUPTED.
+
+        We patch ``serve_forever`` to raise ``KeyboardInterrupt``
+        immediately, which simulates a Ctrl-C before any request is
+        served. The CLI's handler should map that to the standard
+        shell-interruption exit code.
+        """
+
+        def fake_serve_forever(status_path, *, host, port) -> None:
+            del status_path, host, port
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr("neuropose.monitor.serve_forever", fake_serve_forever)
+        result = runner.invoke(app, ["serve"])
+        assert result.exit_code == EXIT_INTERRUPTED
+
+    def test_serve_bind_error_is_usage_error(
+        self,
+        runner: CliRunner,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A port-already-in-use OSError should surface as EXIT_USAGE."""
+
+        def fake_serve_forever(status_path, *, host, port) -> None:
+            del status_path, host, port
+            raise OSError("address already in use")
+
+        monkeypatch.setattr("neuropose.monitor.serve_forever", fake_serve_forever)
+        result = runner.invoke(app, ["serve"])
+        assert result.exit_code == EXIT_USAGE
+        assert "could not bind" in result.output.lower()
 
 
 # ---------------------------------------------------------------------------

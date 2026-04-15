@@ -515,7 +515,24 @@ class JobResults(RootModel[dict[str, VideoPredictions]]):
 
 
 class JobStatusEntry(BaseModel):
-    """Status entry for a single job in the persistent status file."""
+    """Status entry for a single job in the persistent status file.
+
+    The progress fields (``current_video``, ``frames_processed``,
+    ``frames_total``, ``videos_completed``, ``videos_total``,
+    ``percent_complete``, ``last_update``) are populated by the
+    :class:`~neuropose.interfacer.Interfacer` as inference proceeds,
+    on a cadence driven by
+    :attr:`~neuropose.config.Settings.status_checkpoint_every_frames`.
+    They are optional so that legacy status files — written before the
+    monitor shipped — still validate on load, and so that any entry in
+    a terminal state (``completed`` / ``failed``) can leave them as
+    ``None`` without confusing the monitor.
+
+    ``percent_complete`` is the overall job progress in
+    ``[0.0, 100.0]``, computed across all videos in a multi-video job
+    (one video done + one partially done → fractional numerator). The
+    monitor renders it directly into the progress bar.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -528,6 +545,58 @@ class JobStatusEntry(BaseModel):
         description=(
             "Short human-readable reason if status == failed. "
             "Populated by the interfacer on failure paths."
+        ),
+    )
+    current_video: str | None = Field(
+        default=None,
+        description=(
+            "Filename (basename, no directory) of the video currently "
+            "being processed within the job. ``None`` for jobs that "
+            "have not started yet or that are in a terminal state."
+        ),
+    )
+    frames_processed: int | None = Field(
+        default=None,
+        ge=0,
+        description="Frames processed in the current video.",
+    )
+    frames_total: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "OpenCV's ``CAP_PROP_FRAME_COUNT`` hint for the current "
+            "video. Unreliable for variable-rate videos; callers that "
+            "rely on this for ETA should treat it as an estimate."
+        ),
+    )
+    videos_completed: int | None = Field(
+        default=None,
+        ge=0,
+        description="Number of videos finished in this job.",
+    )
+    videos_total: int | None = Field(
+        default=None,
+        ge=0,
+        description="Total number of videos in this job.",
+    )
+    percent_complete: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=100.0,
+        description=(
+            "Overall job progress in ``[0.0, 100.0]``, computed across "
+            "all videos in the job. ``None`` for entries that have no "
+            "progress data yet (recently-created or pre-monitor)."
+        ),
+    )
+    last_update: datetime | None = Field(
+        default=None,
+        description=(
+            "Wall-clock time of the most recent progress checkpoint. "
+            "Compared against ``datetime.now(UTC)`` by the monitor to "
+            "flag stale entries — a ``processing`` entry whose "
+            "``last_update`` is several minutes old may indicate a "
+            "wedged daemon."
         ),
     )
 

@@ -16,6 +16,7 @@ from neuropose.io import (
     FramePrediction,
     JobResults,
     JobStatus,
+    JobStatusEntry,
     JointAngleExtractor,
     JointAxisExtractor,
     JointPairDistanceExtractor,
@@ -524,4 +525,87 @@ class TestStatusFile:
                         "started_at": datetime(2026, 4, 13, tzinfo=UTC).isoformat(),
                     }
                 }
+            )
+
+
+class TestJobStatusEntryProgressFields:
+    def test_progress_fields_default_to_none(self) -> None:
+        entry = JobStatusEntry(
+            status=JobStatus.PROCESSING,
+            started_at=datetime(2026, 4, 13, tzinfo=UTC),
+        )
+        assert entry.current_video is None
+        assert entry.frames_processed is None
+        assert entry.frames_total is None
+        assert entry.videos_completed is None
+        assert entry.videos_total is None
+        assert entry.percent_complete is None
+        assert entry.last_update is None
+
+    def test_legacy_status_file_without_progress_loads(self, tmp_path: Path) -> None:
+        """Files written before the progress fields existed must still load."""
+        started = datetime(2026, 4, 13, 12, 0, 0, tzinfo=UTC)
+        path = tmp_path / "legacy.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "job_001": {
+                        "status": "completed",
+                        "started_at": started.isoformat(),
+                        "completed_at": started.isoformat(),
+                        "results_path": "/tmp/results.json",
+                        "error": None,
+                    }
+                }
+            )
+        )
+        loaded = load_status(path)
+        entry = loaded.root["job_001"]
+        assert entry.percent_complete is None
+
+    def test_progress_roundtrips_through_json(self, tmp_path: Path) -> None:
+        now = datetime(2026, 4, 13, 12, 0, 0, tzinfo=UTC)
+        status = StatusFile(
+            root={
+                "job_001": JobStatusEntry(
+                    status=JobStatus.PROCESSING,
+                    started_at=now,
+                    current_video="trial_01.mp4",
+                    frames_processed=450,
+                    frames_total=1200,
+                    videos_completed=0,
+                    videos_total=3,
+                    percent_complete=12.5,
+                    last_update=now,
+                ),
+            }
+        )
+        path = tmp_path / "status.json"
+        save_status(path, status)
+        loaded = load_status(path)
+        entry = loaded.root["job_001"]
+        assert entry.current_video == "trial_01.mp4"
+        assert entry.frames_processed == 450
+        assert entry.percent_complete == 12.5
+
+    def test_percent_complete_rejects_out_of_range(self) -> None:
+        with pytest.raises(ValidationError):
+            JobStatusEntry(
+                status=JobStatus.PROCESSING,
+                started_at=datetime(2026, 4, 13, tzinfo=UTC),
+                percent_complete=150.0,
+            )
+        with pytest.raises(ValidationError):
+            JobStatusEntry(
+                status=JobStatus.PROCESSING,
+                started_at=datetime(2026, 4, 13, tzinfo=UTC),
+                percent_complete=-5.0,
+            )
+
+    def test_frames_processed_rejects_negative(self) -> None:
+        with pytest.raises(ValidationError):
+            JobStatusEntry(
+                status=JobStatus.PROCESSING,
+                started_at=datetime(2026, 4, 13, tzinfo=UTC),
+                frames_processed=-1,
             )

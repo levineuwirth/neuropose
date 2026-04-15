@@ -259,6 +259,15 @@ class Interfacer:
 
         Raises on any failure — the caller in :meth:`process_job` handles
         the transition to the failed state and the quarantine move.
+
+        During inference the interfacer updates the job's
+        :class:`JobStatusEntry` roughly every
+        :attr:`~neuropose.config.Settings.status_checkpoint_every_frames`
+        frames, so :mod:`neuropose.monitor` can render a live progress
+        bar for collaborators. Each checkpoint is a full atomic rewrite
+        of ``status.json`` via :func:`save_status`, which is
+        acceptable because scheduled pose inference is many orders of
+        magnitude more expensive than the write itself.
         """
         job_in_path = self._settings.input_dir / job_name
         job_out_path = self._settings.output_dir / job_name
@@ -271,21 +280,77 @@ class Interfacer:
                 f"(accepted extensions: {sorted(VIDEO_EXTENSIONS)})"
             )
 
+        videos_total = len(videos)
+        # Seed the initial progress checkpoint so the monitor shows
+        # "videos_total=N, videos_completed=0" from the first poll after
+        # the job starts, rather than waiting until a callback fires.
+        self._checkpoint_progress(
+            job_name,
+            started_at=started_at,
+            current_video=videos[0].name,
+            frames_processed=0,
+            frames_total=None,
+            videos_completed=0,
+            videos_total=videos_total,
+        )
+
         per_video_predictions = {}
-        for video_path in videos:
+        checkpoint_every = self._settings.status_checkpoint_every_frames
+        for video_index, video_path in enumerate(videos):
             if self._stop:
                 raise JobProcessingError(
                     f"stop requested mid-job after processing "
-                    f"{len(per_video_predictions)}/{len(videos)} videos"
+                    f"{len(per_video_predictions)}/{videos_total} videos"
                 )
             logger.info("[%s] Processing video %s", job_name, video_path.name)
-            result = self._estimator.process_video(video_path)
+
+            def _on_frame(
+                processed: int,
+                total_hint: int,
+                *,
+                # Bind the loop-local values so the closure captures
+                # them correctly for each iteration — without this the
+                # late-binding gotcha would make every callback report
+                # the last video's name once the loop advances.
+                _job_name: str = job_name,
+                _started_at: datetime = started_at,
+                _current_video: str = video_path.name,
+                _video_index: int = video_index,
+                _videos_total: int = videos_total,
+                _checkpoint_every: int = checkpoint_every,
+            ) -> None:
+                if processed % _checkpoint_every != 0:
+                    return
+                self._checkpoint_progress(
+                    _job_name,
+                    started_at=_started_at,
+                    current_video=_current_video,
+                    frames_processed=processed,
+                    frames_total=total_hint if total_hint > 0 else None,
+                    videos_completed=_video_index,
+                    videos_total=_videos_total,
+                )
+
+            result = self._estimator.process_video(video_path, progress=_on_frame)
             per_video_predictions[video_path.name] = result.predictions
             logger.info(
                 "[%s] Processed %s (%d frames)",
                 job_name,
                 video_path.name,
                 result.frame_count,
+            )
+            # Post-video checkpoint: snap videos_completed to the end of
+            # this video even if the last frame didn't fall on the
+            # checkpoint cadence, so the monitor's "N / M videos done"
+            # line is always exact after a video finishes.
+            self._checkpoint_progress(
+                job_name,
+                started_at=started_at,
+                current_video=video_path.name,
+                frames_processed=result.frame_count,
+                frames_total=result.frame_count,
+                videos_completed=video_index + 1,
+                videos_total=videos_total,
             )
 
         job_results = JobResults(root=per_video_predictions)
@@ -298,7 +363,72 @@ class Interfacer:
             started_at=started_at,
             completed_at=datetime.now(UTC),
             results_path=results_path,
+            videos_completed=videos_total,
+            videos_total=videos_total,
+            percent_complete=100.0,
+            last_update=datetime.now(UTC),
         )
+
+    def _checkpoint_progress(
+        self,
+        job_name: str,
+        *,
+        started_at: datetime,
+        current_video: str,
+        frames_processed: int,
+        frames_total: int | None,
+        videos_completed: int,
+        videos_total: int,
+    ) -> None:
+        """Rewrite ``status.json`` with the current per-job progress.
+
+        Computes ``percent_complete`` across the whole job: videos that
+        have fully finished contribute ``1.0`` each, and the current
+        video contributes ``frames_processed / frames_total`` if the
+        frame-count hint is known, else a partial-credit estimate of
+        ``0.5``. The overall fraction is then averaged across
+        ``videos_total`` and scaled to 0-100.
+
+        Never raises on an I/O error — progress checkpoints are
+        best-effort. If the write fails we log and move on so the
+        inference loop keeps making forward progress.
+        """
+        if frames_total and frames_total > 0:
+            current_fraction = frames_processed / frames_total
+        elif frames_processed > 0:
+            current_fraction = 0.5
+        else:
+            current_fraction = 0.0
+        overall_fraction = (videos_completed + current_fraction) / max(videos_total, 1)
+        percent = max(0.0, min(100.0, overall_fraction * 100.0))
+
+        try:
+            status = load_status(self._settings.status_file)
+            existing = status.root.get(job_name)
+            if existing is None:
+                # The entry should have been seeded by process_job before
+                # _run_job_inner was called. If it isn't there, skip the
+                # checkpoint — something else has already deleted the
+                # entry and we do not want to recreate a ghost.
+                return
+            status.root[job_name] = existing.model_copy(
+                update={
+                    "current_video": current_video,
+                    "frames_processed": frames_processed,
+                    "frames_total": frames_total,
+                    "videos_completed": videos_completed,
+                    "videos_total": videos_total,
+                    "percent_complete": percent,
+                    "last_update": datetime.now(UTC),
+                }
+            )
+            save_status(self._settings.status_file, status)
+        except Exception:
+            logger.warning(
+                "[%s] Failed to checkpoint progress; continuing inference",
+                job_name,
+                exc_info=True,
+            )
 
     def _discover_new_jobs(self, status: StatusFile) -> list[str]:
         """Return names of job subdirectories not yet tracked in ``status``.

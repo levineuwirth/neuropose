@@ -85,6 +85,20 @@ site/
 # Allow committing example videos under tests/fixtures/ explicitly.
 !tests/fixtures/**
 
+# --- Benchmark scratch directory -------------------------------------------
+# ``benchmarks/videos/`` is a workflow convenience: drop benchmark inputs
+# there, rsync the whole repo checkout to the research Mac, and the videos
+# travel alongside the code without needing a second path on either end.
+# Everything inside is ignored except the README; the global video-suffix
+# rules above already cover common extensions, and this belt catches any
+# other cruft (partial rsync transfers, .DS_Store, etc.) that might land
+# in the directory.
+#
+# Policy reminder: benchmark test videos only. Subject / clinical data
+# must still go through $XDG_DATA_HOME — see benchmarks/README.md.
+/benchmarks/videos/*
+!/benchmarks/videos/README.md
+
 # --- Secrets ---------------------------------------------------------------
 .env
 .env.*

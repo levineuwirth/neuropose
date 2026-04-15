@@ -93,6 +93,8 @@ nav:
       - neuropose.config: api/config.md
       - neuropose.estimator: api/estimator.md
       - neuropose.interfacer: api/interfacer.md
+      - neuropose.ingest: api/ingest.md
+      - neuropose.monitor: api/monitor.md
       - neuropose.io: api/io.md
       - neuropose.benchmark: api/benchmark.md
       - neuropose.analyzer.segment: api/segment.md

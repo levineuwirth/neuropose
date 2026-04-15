@@ -68,6 +68,77 @@ output. This is the "is `tensorflow-metal` producing correct
 numerics?" check that `RESEARCH.md`'s TensorFlow-version-compatibility
 section leaves open for v0.1.
 
+### monitor
+
+**Role:** localhost HTTP dashboard. Reads `$data_dir/out/status.json`
+on every request and serves a small HTML page (with an auto-refresh
+`<meta>` tag, per-job progress bars, and stale-entry warnings) plus
+the raw `StatusFile` as JSON at `/status.json`. Runs as a separate
+process from the daemon — operators start it with `neuropose serve`,
+it is safe to run alongside `neuropose watch`, and it stays useful
+even if the daemon is down (last-known state is shown with the stale
+badge flagging any lingering `processing` entries).
+
+Design choices:
+
+- **Pure stdlib.** The server is built on `http.server` with a small
+  request-handler subclass. No FastAPI, no Flask — this is a localhost
+  tool and the cost of a framework is not justified.
+- **Loopback by default.** Binds to `127.0.0.1:8765` with an explicit
+  `--host` flag to override. Collaborators on the same machine reach
+  it directly; collaborators elsewhere should go through an SSH
+  tunnel or explicitly configured reverse proxy. Binding to
+  `0.0.0.0` is a real network-exposure decision the operator should
+  make with eyes open.
+- **No cache.** Every request re-reads `status.json`, which is tiny
+  and already written atomically by the daemon, so no sync protocol
+  is needed between the two processes.
+- **Two surfaces, same data.** `GET /` renders HTML for browsers;
+  `GET /status.json` returns the raw `StatusFile` for `curl` /
+  scripted pipelines. `?job=<name>` filters to a single entry for
+  programmatic consumers that only care about one job.
+- **Live progress data comes from the interfacer**, not from the
+  monitor. The interfacer checkpoints the currently-running job's
+  `JobStatusEntry` every
+  `settings.status_checkpoint_every_frames` frames (default 30) via
+  the estimator's `progress` callback, updating `frames_processed`,
+  `percent_complete`, and `last_update` on the in-memory status file
+  and calling `save_status`. The monitor then reads those fields and
+  renders the progress bar — no separate live channel, no in-memory
+  cache on the monitor side.
+
+### ingest
+
+**Role:** bulk-intake utility. Accepts a zip archive of videos and
+produces one job directory per video under `$data_dir/in/`, ready for
+the `interfacer` daemon to pick up on its next poll.
+
+The ingester is a **pure library call** (`ingest_zip`) plus a thin
+CLI wrapper (`neuropose ingest`). It does not run inference itself —
+it only stages files so the existing watch-directory pipeline does
+the work. Key guarantees:
+
+- **Validate-before-write.** Path-traversal members, zip bombs, and
+  empty archives are rejected before any file lands on disk, so a
+  failed ingest leaves the operator with a clean state.
+- **Transactional placement.** Each video is extracted to a staging
+  directory under `$data_dir/.ingest_<uuid>/`, and only then
+  atomically renamed into `$data_dir/in/<job_name>/`. The daemon
+  never sees a half-populated job directory.
+- **Collision detection is up-front and exhaustive.** Zip-internal
+  collisions (two videos that flatten to the same job name) and
+  external collisions (a job directory already exists) are reported
+  as a single error listing every offending name. `--force`
+  deletes-and-replaces; without it, nothing is written.
+- **Flattening preserves disambiguation.** The in-archive path is
+  joined with underscores into the job name — `patient_001/trial_01.mp4`
+  → job `patient_001_trial_01` — so nested organisation survives the
+  flattening without collapsing into silent collisions.
+
+The set of accepted extensions comes from
+`neuropose.interfacer.VIDEO_EXTENSIONS`, so any format the daemon
+can already process is a valid ingest target.
+
 ### interfacer
 
 **Role:** job-lifecycle daemon. Watches `input_dir` for new job

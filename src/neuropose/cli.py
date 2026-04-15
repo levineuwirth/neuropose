@@ -1,11 +1,17 @@
 """NeuroPose command-line interface.
 
-Five subcommands:
+Seven subcommands:
 
 - ``neuropose watch`` — run the :class:`~neuropose.interfacer.Interfacer`
   daemon against the configured input directory.
 - ``neuropose process <video>`` — run the estimator on a single video and
   write the predictions JSON to disk.
+- ``neuropose ingest <archive>`` — extract a zip archive of videos into
+  per-video job directories under ``$data_dir/in/``, queued for the
+  running daemon to process.
+- ``neuropose serve`` — start the :mod:`~neuropose.monitor` localhost
+  HTTP dashboard so collaborators can watch a run's progress in a
+  browser or via ``curl``.
 - ``neuropose segment <results>`` — post-hoc repetition segmentation of
   an existing predictions file. Attaches a named
   :class:`~neuropose.io.Segmentation` to every video it contains and
@@ -254,6 +260,170 @@ def process(
     out_path = output if output is not None else Path.cwd() / f"{video.stem}_predictions.json"
     save_video_predictions(out_path, result.predictions)
     typer.echo(f"wrote {out_path} ({result.frame_count} frames)")
+
+
+# ---------------------------------------------------------------------------
+# ingest
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def ingest(
+    ctx: typer.Context,
+    archive: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help=(
+                "Path to a zip archive of videos. Each video inside becomes "
+                "its own job directory under $data_dir/in/ and is picked up "
+                "by the running daemon on its next poll."
+            ),
+        ),
+    ],
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help=(
+                "Overwrite any existing job directories that collide with "
+                "the archive's contents. Without --force, the first "
+                "collision aborts the whole operation without writing to "
+                "disk."
+            ),
+        ),
+    ] = False,
+) -> None:
+    """Ingest a zip archive of videos into the daemon's input directory.
+
+    Each video member of the archive produces one new job directory in
+    ``$data_dir/in/<job_name>/``. Job names are derived from the
+    in-archive path (slashes become underscores, extension dropped,
+    unsafe characters sanitized) so nested structures like
+    ``patient_001/trial_01.mp4`` and ``patient_002/trial_01.mp4``
+    cannot collide into the same job.
+
+    The ingest is transactional: either every video in the archive is
+    placed, or none are. Zip-internal collisions, external collisions
+    with existing job directories, path-traversal members, and total-
+    size overruns are all caught before any disk writes happen.
+
+    Non-video members (``README.md``, ``.DS_Store``, etc.) are silently
+    skipped. The set of accepted extensions matches the interfacer's
+    :data:`~neuropose.interfacer.VIDEO_EXTENSIONS`.
+    """
+    # Deferred import keeps the ingest module's dependencies (zipfile,
+    # shutil) out of the CLI's top-level import surface.
+    from neuropose.ingest import (
+        ArchiveEmptyError,
+        ArchiveInvalidError,
+        ArchiveTooLargeError,
+        IngestError,
+        JobCollisionError,
+        ingest_zip,
+    )
+
+    settings: Settings = ctx.obj
+    try:
+        result = ingest_zip(
+            archive,
+            input_dir=settings.input_dir,
+            force=force,
+        )
+    except JobCollisionError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        for name in exc.collisions:
+            typer.echo(f"  - {name}", err=True)
+        raise typer.Exit(code=EXIT_USAGE) from exc
+    except ArchiveEmptyError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=EXIT_USAGE) from exc
+    except ArchiveTooLargeError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=EXIT_USAGE) from exc
+    except ArchiveInvalidError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=EXIT_USAGE) from exc
+    except IngestError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=EXIT_USAGE) from exc
+
+    typer.echo(
+        f"ingested {result.job_count} job(s) from {archive} "
+        f"({result.total_uncompressed_bytes / (1024 * 1024):.1f} MB, "
+        f"{len(result.skipped_non_videos)} non-video member(s) skipped)"
+    )
+    for job in result.ingested:
+        typer.echo(f"  {job.job_name}/{job.video_filename}")
+
+
+# ---------------------------------------------------------------------------
+# serve
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def serve(
+    ctx: typer.Context,
+    host: Annotated[
+        str,
+        typer.Option(
+            "--host",
+            help=(
+                "Interface to bind. Defaults to 127.0.0.1 so the "
+                "monitor is loopback-only; pass 0.0.0.0 or an explicit "
+                "external IP only when you have thought through the "
+                "network exposure."
+            ),
+        ),
+    ] = "127.0.0.1",
+    port: Annotated[
+        int,
+        typer.Option(
+            "--port",
+            min=1,
+            max=65535,
+            help="TCP port to listen on.",
+        ),
+    ] = 8765,
+) -> None:
+    """Serve the NeuroPose localhost status dashboard.
+
+    Reads the daemon's ``status.json`` (at ``Settings.status_file``)
+    on every HTTP request and renders a small dashboard at ``/`` plus
+    JSON at ``/status.json`` and a liveness probe at ``/health``.
+    Safe to run alongside ``neuropose watch``; safe to run without
+    the daemon (last-known state is served with a stale-entry warning
+    for any lingering ``processing`` jobs).
+
+    Blocks in ``serve_forever`` until interrupted by SIGINT or
+    SIGTERM, at which point the server shuts down cleanly.
+    """
+    settings: Settings = ctx.obj
+    # Deferred import: the monitor module and its stdlib HTTP server
+    # are only needed for this subcommand, and keeping them off the
+    # watch/process hot path avoids paying their import cost on the
+    # inference daemon's startup.
+    from neuropose.monitor import serve_forever
+
+    status_path = settings.status_file
+    typer.echo(f"serving neuropose monitor on http://{host}:{port}/")
+    typer.echo(f"  reading {status_path}")
+    typer.echo(f"  JSON:  http://{host}:{port}/status.json")
+    typer.echo("  press Ctrl-C to stop")
+    try:
+        serve_forever(status_path, host=host, port=port)
+    except KeyboardInterrupt as exc:
+        raise typer.Exit(code=EXIT_INTERRUPTED) from exc
+    except OSError as exc:
+        # Typical failure: address already in use, or permission
+        # denied binding to a privileged port. Translate to a clean
+        # usage error rather than a raw traceback.
+        typer.echo(f"error: could not bind {host}:{port}: {exc}", err=True)
+        raise typer.Exit(code=EXIT_USAGE) from exc
 
 
 # ---------------------------------------------------------------------------
