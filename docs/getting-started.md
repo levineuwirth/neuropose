@@ -16,10 +16,14 @@ before.
 - Internet access on first run (for the ~2 GB MeTRAbs model download)
 
 !!! note "Apple Silicon"
-    NeuroPose pins `tensorflow>=2.16`, which is the first TensorFlow
-    release with native `darwin/arm64` wheels on PyPI. Mac users get a
-    working CPU install from the same command Linux users run — no
-    `tensorflow-macos`, no platform markers, no extra configuration.
+    NeuroPose pins `tensorflow>=2.16,<2.19`. The 2.16 floor is the first
+    TensorFlow release with native `darwin/arm64` wheels on PyPI; the
+    `<2.19` ceiling tracks the highest TF version that Apple's
+    `tensorflow-metal` plugin works cleanly with (see the *Metal GPU
+    acceleration* note below and `RESEARCH.md` for the full reasoning).
+    Mac users get a working CPU install from the same command Linux
+    users run — no `tensorflow-macos`, no platform markers, no extra
+    configuration.
 
     Metal GPU acceleration is available as an **opt-in extra** for
     users who need it:

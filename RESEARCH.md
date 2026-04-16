@@ -356,7 +356,7 @@ that crosses the Keras-3 cutover at TF 2.16.
 
 ### Decision
 
-Pin `tensorflow>=2.16,<3.0`. Reasoning:
+Pin `tensorflow>=2.16,<2.19`. Reasoning:
 
 1. **2.16 is the Apple Silicon floor that matters.** TF 2.16 is the
    first release with native `darwin/arm64` wheels published on PyPI
@@ -387,6 +387,26 @@ Pin `tensorflow>=2.16,<3.0`. Reasoning:
    `docs/getting-started.md`, and users are expected to spot-check
    `poses3d` output against the CPU path before trusting it for any
    clinical measurement.
+4. **`tensorflow-metal` forces a TF upper bound.** `tensorflow-metal`
+   1.2.0 (released January 2025, the latest version as of 2026-04) is
+   advertised as supporting "TF 2.18+" but in practice fails on
+   2.19 and 2.20 with symbol-not-found errors and graph-execution
+   `InvalidArgumentError`s. See
+   [tensorflow/tensorflow#84167](https://github.com/tensorflow/tensorflow/issues/84167)
+   and the Apple Developer forum threads at
+   [developer.apple.com/forums/thread/772147](https://developer.apple.com/forums/thread/772147)
+   and [developer.apple.com/forums/thread/803658](https://developer.apple.com/forums/thread/803658).
+   2.18.x is the last version confirmed to work cleanly on Apple
+   Silicon GPU. Even though the Metal path is opt-in, dependency
+   resolution is shared — if uv resolves `tensorflow` to 2.21 on a
+   Linux developer's machine and 2.18 on the Mac, lockfile churn
+   and "works on my box" become permanent. Cap is therefore applied
+   globally rather than via a darwin/arm64 marker split. Cost on
+   Linux is zero: nothing in the pipeline depends on TF 2.19+
+   features, and the SavedModel ran fine on TF 2.21 in the probe
+   above, so the cap is purely an external-package constraint. Lift
+   it once Apple ships a Metal plugin that tracks mainline
+   TensorFlow again.
 
 ### What is **not** yet verified
 
@@ -422,9 +442,11 @@ Pin `tensorflow>=2.16,<3.0`. Reasoning:
    detector head), how do we want the loader to fail? Currently the
    `_REQUIRED_MODEL_ATTRS` interface check would still pass; the failure
    would surface at first `detect_poses` call, which is late.
-3. Does it make sense to upper-bound the pin more tightly than `<3.0`
+3. ~~Does it make sense to upper-bound the pin more tightly than `<3.0`
    (e.g. `<2.22` to bound to tested versions), or is the SemVer guard
-   sufficient given the all-stock-ops result?
+   sufficient given the all-stock-ops result?~~ **Resolved 2026-04-16.**
+   Tightened to `<2.19` for `tensorflow-metal` compatibility. See
+   reasoning point 4 in the Decision section above.
 
 ### Next steps
 

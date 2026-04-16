@@ -20,7 +20,7 @@ be split into per-release sections once tagging begins.
   policy-enforcing `.gitignore`, pinned Python 3.11 (`.python-version`),
   and `pyproject.toml` with full project metadata, classifiers, and
   URL pointers. The runtime TensorFlow dependency is pinned to
-  `tensorflow>=2.16,<3.0` — see *Changed* below for the rationale.
+  `tensorflow>=2.16,<2.19` — see *Changed* below for the rationale.
   `psutil>=5.9` is a runtime dependency used by the estimator's
   always-on `PerformanceMetrics` collection to sample peak RSS.
 - `[project.optional-dependencies].analysis` extra for fastdtw, scipy,
@@ -381,17 +381,24 @@ be split into per-release sections once tagging begins.
   `datetime.utcnow()`, addresses the "no-videos"-vs-exception-path
   inconsistency (both now quarantine), and persists a structured
   `error` string on every failure for grep-friendly diagnostics.
-- **TensorFlow pin tightened to `tensorflow>=2.16,<3.0`.** The 2.16
+- **TensorFlow pin set to `tensorflow>=2.16,<2.19`.** The 2.16
   floor is the first release with native `darwin/arm64` wheels under
   the `tensorflow` package name on PyPI, so a single dependency line
   works across Linux x86_64, Linux arm64, and Apple Silicon macOS
   without platform markers or a separate `tensorflow-macos` package.
-  Empirical verification: the pinned MeTRAbs SavedModel
-  (`metrabs_eff2l_y4_384px_800k_28ds`, serialized with TF 2.10)
-  loads and runs `detect_poses` end-to-end on TF 2.21 + Keras 3 with
-  no errors, and exposes only stock TensorFlow ops (zero MeTRAbs
-  custom kernels). Full test matrix and op inventory in
-  `RESEARCH.md`.
+  The `<2.19` ceiling is a `tensorflow-metal` compatibility constraint:
+  the latest Metal plugin (1.2.0, January 2025) advertises "TF 2.18+"
+  but in practice fails on 2.19 and 2.20 with symbol-not-found errors
+  and graph-execution `InvalidArgumentError`s
+  ([tensorflow/tensorflow#84167](https://github.com/tensorflow/tensorflow/issues/84167)).
+  Cap is global rather than darwin-only so dependency resolution stays
+  identical across platforms. The MeTRAbs SavedModel itself
+  (`metrabs_eff2l_y4_384px_800k_28ds`, serialized with TF 2.10) was
+  separately verified to load and run `detect_poses` end-to-end on
+  TF 2.21 + Keras 3 with no errors and zero custom ops, so the cap is
+  purely an external-package constraint and can lift once Apple ships
+  a Metal plugin that tracks mainline TensorFlow again. Full probe
+  data and op inventory in `RESEARCH.md`.
 - Operating-system classifiers in `pyproject.toml` extended from
   Linux-only to `POSIX` + `POSIX :: Linux` + `MacOS`, reflecting the
   Apple Silicon support that the TF 2.16 floor makes real.

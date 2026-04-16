@@ -223,7 +223,7 @@ def _make_metrics(
         peak_rss_mb=peak_rss_mb,
         active_device=active_device,
         tensorflow_metal_active=metal_active,
-        tensorflow_version="2.21.0",
+        tensorflow_version="2.18.0",
     )
 
 
@@ -240,7 +240,7 @@ def _make_aggregate() -> BenchmarkAggregate:
         peak_rss_mb_max=512.0,
         active_device="/CPU:0",
         tensorflow_metal_active=False,
-        tensorflow_version="2.21.0",
+        tensorflow_version="2.18.0",
     )
 
 
@@ -256,7 +256,7 @@ class TestPerformanceMetricsModel:
                 total_seconds=-1.0,
                 peak_rss_mb=0.0,
                 active_device="/CPU:0",
-                tensorflow_version="2.21.0",
+                tensorflow_version="2.18.0",
             )
 
     def test_rejects_negative_peak_rss(self) -> None:
@@ -265,7 +265,7 @@ class TestPerformanceMetricsModel:
                 total_seconds=1.0,
                 peak_rss_mb=-5.0,
                 active_device="/CPU:0",
-                tensorflow_version="2.21.0",
+                tensorflow_version="2.18.0",
             )
 
     def test_model_load_seconds_optional(self) -> None:

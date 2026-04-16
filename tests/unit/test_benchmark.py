@@ -246,7 +246,7 @@ class TestFormatBenchmarkReport:
             peak_rss_mb=512.0,
             active_device="/CPU:0",
             tensorflow_metal_active=False,
-            tensorflow_version="2.21.0",
+            tensorflow_version="2.18.0",
         )
 
     def test_report_mentions_key_fields(
@@ -276,7 +276,7 @@ class TestFormatBenchmarkReport:
             peak_rss_mb=100.0,
             active_device="/GPU:0",
             tensorflow_metal_active=True,
-            tensorflow_version="2.21.0",
+            tensorflow_version="2.18.0",
         )
         agg = BenchmarkAggregate(
             repeats_measured=1,
@@ -290,7 +290,7 @@ class TestFormatBenchmarkReport:
             peak_rss_mb_max=100.0,
             active_device="/GPU:0",
             tensorflow_metal_active=True,
-            tensorflow_version="2.21.0",
+            tensorflow_version="2.18.0",
         )
         result = BenchmarkResult(
             video_name="test.mp4",

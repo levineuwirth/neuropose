@@ -45,8 +45,18 @@ classifiers = [
 # split to ``tensorflow-macos`` on Apple Silicon. The MeTRAbs SavedModel was
 # serialized with TF 2.10 and uses only stock ops (no custom kernels), so
 # any TF >= 2.10 loads it; 2.16 is chosen for cross-platform install
-# uniformity, not for any MeTRAbs-side requirement. End-to-end verification
-# against TF 2.21 is logged in RESEARCH.md.
+# uniformity, not for any MeTRAbs-side requirement.
+#
+# The ``<2.19`` ceiling is a tensorflow-metal compatibility constraint, not
+# a MeTRAbs one. Apple's ``tensorflow-metal`` 1.2.0 (the latest release,
+# Jan 2025) advertises "TF 2.18+" support, but community reports on the
+# Apple Developer forums and tensorflow/tensorflow#84167 show it actually
+# breaks on 2.19+ with symbol-not-found errors and ``InvalidArgumentError``
+# at graph execution time. 2.18.x is the last version confirmed to work
+# cleanly on Apple Silicon GPU. Cap applied globally rather than with a
+# darwin/arm64 marker split to keep dependency resolution identical across
+# platforms; revisit once Apple ships a Metal plugin that tracks mainline
+# TensorFlow again.
 dependencies = [
   "typer>=0.12",
   "pydantic>=2.6",
@@ -61,7 +71,7 @@ dependencies = [
   # small C extension; brought in at runtime because metrics are always
   # collected, not an optional feature.
   "psutil>=5.9",
-  "tensorflow>=2.16,<3.0",
+  "tensorflow>=2.16,<2.19",
   "tensorflow-hub>=0.16",
 ]
 

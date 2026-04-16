@@ -49,32 +49,42 @@ a tracked extension inside `benchmarks/videos/` because only
 
 ## Rsyncing to the research Mac
 
-The directory layout is designed so one `rsync` path covers both
-code and videos:
+The repo ships a wrapper script, [`scripts/sync_benchmarks.sh`](../scripts/sync_benchmarks.sh),
+that pushes the whole `benchmarks/` directory to the research Mac
+with a predictable command:
 
 ```console
-$ rsync -av --delete \
-    --exclude='.venv/' \
-    --exclude='site/' \
-    --exclude='.git/' \
-    ~/Repos/research/brown/shu/neuropose/ \
-    mac.local:~/Repos/research/brown/shu/neuropose/
+$ scripts/sync_benchmarks.sh              # copy files, no deletions
+$ scripts/sync_benchmarks.sh --dry-run    # preview what would transfer
+$ scripts/sync_benchmarks.sh --delete     # make remote exactly mirror local
+```
+
+Defaults are baked in for the Shu Lab research Mac
+(`Levi@100.64.15.110:/Users/levi/Repos/neuropose/benchmarks/`). Point
+the script at a different destination via environment variables:
+
+```console
+$ REMOTE_HOST=me@other-host REMOTE_PATH=/tmp/benchmarks/ \
+    scripts/sync_benchmarks.sh
 ```
 
 After the sync, the videos in `benchmarks/videos/` on the Mac are
-identical to the ones on Linux, so a benchmark run on the Mac can
-reference the same filename the Linux report does — makes cross-
-machine comparisons trivial.
+identical to the ones on the source machine, so a benchmark run on
+the Mac can reference the same filename the local report does —
+makes cross-machine comparisons trivial.
 
-Tips:
+Notes:
 
-- Add `--exclude='benchmarks/videos/*.json'` if you want to keep
-  per-machine benchmark results isolated.
-- `--delete` makes the target exactly mirror the source. Without
-  it, old files on the target persist — safer but surprising.
-- For one-off pushes, `scp benchmarks/videos/clip.mp4
-  mac.local:~/Repos/research/brown/shu/neuropose/benchmarks/videos/`
-  works without touching the rest of the repo.
+- **`--delete` is opt-in.** The default is purely additive so the
+  remote can hold per-machine benchmark result JSONs that the source
+  machine does not have. Pass `--delete` only when you want the
+  remote to become an exact mirror.
+- **`--partial` is always on.** An interrupted transfer of a
+  multi-gigabyte video can resume on the next invocation without
+  starting from zero.
+- **One-off pushes** of a single file still work fine with plain
+  `scp` (or rsync directly) — the wrapper script is for the
+  "everything in `benchmarks/`" case.
 
 ## Bulk intake via `neuropose ingest`
 
