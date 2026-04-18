@@ -524,9 +524,7 @@ def reset(
         typer.echo("would stop:     no daemon or monitor running")
     if preview.removed_paths:
         size_mb = preview.bytes_freed / (1024 * 1024)
-        typer.echo(
-            f"would remove:   {len(preview.removed_paths)} path(s) ({size_mb:.1f} MB)"
-        )
+        typer.echo(f"would remove:   {len(preview.removed_paths)} path(s) ({size_mb:.1f} MB)")
         for path in preview.removed_paths:
             typer.echo(f"  {path}")
     else:
@@ -574,10 +572,7 @@ def reset(
         raise typer.Exit(code=EXIT_USAGE)
 
     size_mb = report.wipe.bytes_freed / (1024 * 1024)
-    typer.echo(
-        f"removed {len(report.wipe.removed_paths)} path(s) "
-        f"({size_mb:.1f} MB freed)"
-    )
+    typer.echo(f"removed {len(report.wipe.removed_paths)} path(s) ({size_mb:.1f} MB freed)")
 
 
 # ---------------------------------------------------------------------------

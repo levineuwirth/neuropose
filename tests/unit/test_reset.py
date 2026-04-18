@@ -158,9 +158,7 @@ class TestTerminateProcesses:
         assert {p.pid for p in report.stopped} == {10, 20}
         assert report.survivors == []
 
-    def test_survivors_reported_when_force_kill_off(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_survivors_reported_when_force_kill_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("os.kill", lambda pid, sig: None)
         # Process 10 always alive; process 20 dies after SIGINT.
         alive = {10}

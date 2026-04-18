@@ -201,9 +201,7 @@ class TestMigrateVideoPredictions:
             "added_in_v3": "beta",
         }
 
-    def test_missing_intermediate_migration_raises(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_missing_intermediate_migration_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """If CURRENT advances past a version with no registered migration, fail loud."""
         monkeypatch.setattr(migrations, "CURRENT_VERSION", 3)
         # Only v1 -> v2 registered; v2 -> v3 is the missing link.
@@ -223,9 +221,7 @@ class TestMigrateVideoPredictions:
         del fake_two_version_chain
         caplog.set_level(logging.INFO, logger="neuropose.migrations")
         migrate_video_predictions({"schema_version": 1})
-        assert any(
-            "Migrating VideoPredictions" in record.message for record in caplog.records
-        )
+        assert any("Migrating VideoPredictions" in record.message for record in caplog.records)
 
     def test_starting_from_current_logs_nothing(
         self,
@@ -235,9 +231,7 @@ class TestMigrateVideoPredictions:
         del fake_two_version_chain
         caplog.set_level(logging.INFO, logger="neuropose.migrations")
         migrate_video_predictions({"schema_version": 2})
-        assert not any(
-            "Migrating" in record.message for record in caplog.records
-        )
+        assert not any("Migrating" in record.message for record in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -294,9 +288,7 @@ class TestMigrateJobResults:
 
 
 class TestRegistration:
-    def test_duplicate_registration_raises(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_duplicate_registration_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(migrations, "_VIDEO_PREDICTIONS_MIGRATIONS", {})
 
         @migrations.register_video_predictions_migration(from_version=1)
@@ -309,9 +301,7 @@ class TestRegistration:
             def _second(p: dict) -> dict:
                 return p
 
-    def test_decorator_returns_callable_unchanged(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_decorator_returns_callable_unchanged(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The decorator must not wrap or rename the function."""
         monkeypatch.setattr(migrations, "_VIDEO_PREDICTIONS_MIGRATIONS", {})
 
