@@ -222,6 +222,23 @@ be split into per-release sections once tagging begins.
   at `CURRENT_VERSION = 2`, with registered v1 → v2 migrations for
   `VideoPredictions` and `BenchmarkResult` that add the optional
   `provenance` field.
+- **`neuropose.analyzer.features.procrustes_align`** — Kabsch
+  rigid-alignment helper for pose sequences, plus a
+  `ProcrustesMode` literal (`"per_frame"` | `"per_sequence"`) and a
+  frozen `AlignmentDiagnostics` dataclass (`rotation_deg`,
+  `rotation_deg_max`, `translation`, `translation_max`, `scale`,
+  plus the mode that produced them). Per-sequence mode fits one
+  rigid transform across the whole trial; per-frame fits an
+  independent transform per frame. Optional `scale=True` fits a
+  uniform scale factor for cross-subject comparisons. Wired into
+  every DTW entry point in `neuropose.analyzer.dtw` via a new
+  keyword-only `align: AlignMode = "none"` parameter — `"none"`
+  preserves the 0.1 raw-coordinate behaviour, while
+  `"procrustes_per_frame"` and `"procrustes_per_sequence"` route
+  inputs through `procrustes_align` before DTW runs so the returned
+  distance is rotation- and translation-invariant. Paper C's
+  pipeline is expected to set `align="procrustes_per_sequence"`;
+  see `TECHNICAL.md` Phase 0.
 - **`neuropose.io.Provenance`** — reproducibility envelope for every
   inference run. Populated automatically by `Estimator.process_video`
   when the model was loaded via `load_model` (the production path)
@@ -262,10 +279,12 @@ be split into per-release sections once tagging begins.
     methodology investigation.
   - `analyzer.features` — `predictions_to_numpy`,
     `normalize_pose_sequence` (uniform and axis-wise),
-    `pad_sequences` (edge-padding), `extract_joint_angles` (NaN on
-    degenerate vectors), `extract_feature_statistics`
-    (`FeatureStatistics` frozen dataclass), and a `find_peaks` thin
-    wrapper around `scipy.signal.find_peaks`.
+    `pad_sequences` (edge-padding), `procrustes_align` (Kabsch
+    rigid alignment, per-frame or per-sequence, optional uniform
+    scaling), `extract_joint_angles` (NaN on degenerate vectors),
+    `extract_feature_statistics` (`FeatureStatistics` frozen
+    dataclass), and a `find_peaks` thin wrapper around
+    `scipy.signal.find_peaks`.
   - `analyzer.segment` — repetition segmentation for trials in
     which a subject performs the same movement several times. A
     three-layer API: `segment_by_peaks` (pure 1D

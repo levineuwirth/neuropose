@@ -16,6 +16,12 @@ and the warping path. Inputs are expected to be ``(frames, joints, 3)``
 numpy arrays — the shape :func:`~neuropose.analyzer.features.predictions_to_numpy`
 produces.
 
+All three also accept an ``align`` argument that routes the inputs
+through :func:`~neuropose.analyzer.features.procrustes_align` before
+DTW runs, yielding translation- and rotation-invariant distances.
+``align="none"`` (the default) preserves the raw-coordinate behaviour
+shipped in 0.1.
+
 Dependency note
 ---------------
 This module requires :mod:`fastdtw` and :mod:`scipy`, which are part of
@@ -30,8 +36,20 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
+
+from neuropose.analyzer.features import procrustes_align
+
+AlignMode = Literal["none", "procrustes_per_frame", "procrustes_per_sequence"]
+"""Alignment selector for DTW entry points.
+
+- ``"none"`` — feed raw coordinates directly to DTW.
+- ``"procrustes_per_frame"`` — per-frame Kabsch alignment before DTW.
+- ``"procrustes_per_sequence"`` — single sequence-wide Kabsch
+  alignment before DTW.
+"""
 
 
 @dataclass(frozen=True)
@@ -77,7 +95,12 @@ def _require_fastdtw() -> tuple[Callable, Callable]:
     return fastdtw, euclidean
 
 
-def dtw_all(a: np.ndarray, b: np.ndarray) -> DTWResult:
+def dtw_all(
+    a: np.ndarray,
+    b: np.ndarray,
+    *,
+    align: AlignMode = "none",
+) -> DTWResult:
     """DTW on the flattened per-frame joint vector.
 
     Each frame's joints are collapsed into a single vector before DTW
@@ -90,7 +113,12 @@ def dtw_all(a: np.ndarray, b: np.ndarray) -> DTWResult:
     a, b
         Pose sequences as ``(frames, joints, 3)`` numpy arrays. The two
         sequences do not need to have the same number of frames, but
-        they must have the same number of joints.
+        they must have the same number of joints. When ``align`` is not
+        ``"none"``, the two sequences must additionally share a frame
+        count (Procrustes requires a 1:1 correspondence).
+    align
+        Procrustes alignment mode applied before DTW. See
+        :data:`AlignMode`.
 
     Returns
     -------
@@ -101,9 +129,11 @@ def dtw_all(a: np.ndarray, b: np.ndarray) -> DTWResult:
     Raises
     ------
     ValueError
-        If ``a`` and ``b`` do not have the same joint count.
+        If ``a`` and ``b`` do not have the same joint count, or if
+        ``align`` requires a matching frame count that is not present.
     """
     _validate_same_joint_count(a, b)
+    a, b = _maybe_align(a, b, align=align)
     fastdtw, euclidean = _require_fastdtw()
     a_flat = a.reshape(a.shape[0], -1)
     b_flat = b.reshape(b.shape[0], -1)
@@ -111,7 +141,12 @@ def dtw_all(a: np.ndarray, b: np.ndarray) -> DTWResult:
     return DTWResult(distance=float(distance), path=[tuple(p) for p in path])
 
 
-def dtw_per_joint(a: np.ndarray, b: np.ndarray) -> list[DTWResult]:
+def dtw_per_joint(
+    a: np.ndarray,
+    b: np.ndarray,
+    *,
+    align: AlignMode = "none",
+) -> list[DTWResult]:
     """DTW on each joint independently.
 
     Performs one DTW computation per joint, yielding a list of
@@ -124,7 +159,11 @@ def dtw_per_joint(a: np.ndarray, b: np.ndarray) -> list[DTWResult]:
     a, b
         Pose sequences as ``(frames, joints, 3)`` numpy arrays. The two
         sequences do not need to have the same number of frames but
-        must have the same number of joints.
+        must have the same number of joints. When ``align`` is not
+        ``"none"``, they must additionally share a frame count.
+    align
+        Procrustes alignment mode applied before DTW. See
+        :data:`AlignMode`.
 
     Returns
     -------
@@ -134,9 +173,11 @@ def dtw_per_joint(a: np.ndarray, b: np.ndarray) -> list[DTWResult]:
     Raises
     ------
     ValueError
-        If ``a`` and ``b`` do not have the same joint count.
+        If ``a`` and ``b`` do not have the same joint count, or if
+        ``align`` requires a matching frame count that is not present.
     """
     _validate_same_joint_count(a, b)
+    a, b = _maybe_align(a, b, align=align)
     fastdtw, euclidean = _require_fastdtw()
     results: list[DTWResult] = []
     for joint_idx in range(a.shape[1]):
@@ -152,6 +193,8 @@ def dtw_relation(
     b: np.ndarray,
     joint_i: int,
     joint_j: int,
+    *,
+    align: AlignMode = "none",
 ) -> DTWResult:
     """DTW on the displacement vector between two specific joints.
 
@@ -170,6 +213,12 @@ def dtw_relation(
         Indices of the two joints whose relative position should be
         compared. Must be valid indices into ``a`` and ``b``'s joint
         axis.
+    align
+        Procrustes alignment mode applied to the full sequences
+        before the displacement vectors are extracted. See
+        :data:`AlignMode`. Note that displacement vectors are already
+        translation-invariant; alignment is still useful for cancelling
+        camera rotation between trials.
 
     Returns
     -------
@@ -179,8 +228,9 @@ def dtw_relation(
     Raises
     ------
     ValueError
-        If the sequences have different joint counts or if either joint
-        index is out of range.
+        If the sequences have different joint counts, either joint
+        index is out of range, or ``align`` requires a matching frame
+        count that is not present.
     """
     _validate_same_joint_count(a, b)
     num_joints = a.shape[1]
@@ -188,6 +238,7 @@ def dtw_relation(
         raise ValueError(
             f"joint indices must be in [0, {num_joints}); got joint_i={joint_i}, joint_j={joint_j}"
         )
+    a, b = _maybe_align(a, b, align=align)
     fastdtw, euclidean = _require_fastdtw()
     disp_a = a[:, joint_j, :] - a[:, joint_i, :]
     disp_b = b[:, joint_j, :] - b[:, joint_i, :]
@@ -206,3 +257,29 @@ def _validate_same_joint_count(a: np.ndarray, b: np.ndarray) -> None:
             f"input arrays disagree on joint count: "
             f"a has {a.shape[1]} joints, b has {b.shape[1]} joints"
         )
+
+
+def _maybe_align(
+    a: np.ndarray,
+    b: np.ndarray,
+    *,
+    align: AlignMode,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Apply Procrustes alignment if ``align`` requests it.
+
+    Procrustes requires a frame-by-frame correspondence, so this
+    helper rejects calls where the two sequences disagree on frame
+    count and ``align`` is not ``"none"``. Pad upstream with
+    :func:`~neuropose.analyzer.features.pad_sequences` if the lengths
+    differ.
+    """
+    if align == "none":
+        return a, b
+    if a.shape[0] != b.shape[0]:
+        raise ValueError(
+            f"align={align!r} requires matching frame counts; "
+            f"got a with {a.shape[0]} frames and b with {b.shape[0]} frames"
+        )
+    mode = "per_frame" if align == "procrustes_per_frame" else "per_sequence"
+    aligned_a, _target, _diag = procrustes_align(a, b, mode=mode)
+    return aligned_a, b

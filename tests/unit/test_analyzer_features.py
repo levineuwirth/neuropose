@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from neuropose.analyzer.features import (
+    AlignmentDiagnostics,
     FeatureStatistics,
     extract_feature_statistics,
     extract_joint_angles,
@@ -15,6 +16,7 @@ from neuropose.analyzer.features import (
     normalize_pose_sequence,
     pad_sequences,
     predictions_to_numpy,
+    procrustes_align,
 )
 from neuropose.io import VideoPredictions
 
@@ -297,3 +299,177 @@ class TestFindPeaks:
     def test_rejects_2d_input(self) -> None:
         with pytest.raises(ValueError, match="1D"):
             find_peaks(np.zeros((5, 5)))
+
+
+# ---------------------------------------------------------------------------
+# procrustes_align
+# ---------------------------------------------------------------------------
+
+
+def _rotation_matrix_z(angle_rad: float) -> np.ndarray:
+    """Rotation matrix about the Z axis."""
+    c, s = np.cos(angle_rad), np.sin(angle_rad)
+    return np.array(
+        [
+            [c, -s, 0.0],
+            [s, c, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+
+
+def _skeleton(num_joints: int = 8, seed: int = 0) -> np.ndarray:
+    """A deterministic, non-degenerate single-frame skeleton."""
+    rng = np.random.default_rng(seed)
+    return rng.standard_normal((num_joints, 3))
+
+
+class TestProcrustesAlignPerSequence:
+    def test_identical_sequences_yield_identity_transform(self) -> None:
+        sequence = _skeleton()[np.newaxis, :, :].repeat(3, axis=0)  # (3, 8, 3)
+        aligned, target, diag = procrustes_align(sequence, sequence, mode="per_sequence")
+        np.testing.assert_allclose(aligned, sequence, atol=1e-10)
+        np.testing.assert_array_equal(target, sequence)
+        assert diag.mode == "per_sequence"
+        assert diag.rotation_deg == pytest.approx(0.0, abs=1e-6)
+        assert diag.translation == pytest.approx(0.0, abs=1e-9)
+        assert diag.scale == pytest.approx(1.0)
+
+    def test_recovers_known_rotation(self) -> None:
+        # Build a reference sequence; construct the source by rotating it
+        # about Z, then verify alignment returns the reference up to
+        # floating-point error.
+        rotation = _rotation_matrix_z(np.deg2rad(37.0))
+        reference = _skeleton(num_joints=10)[np.newaxis, :, :].repeat(4, axis=0)
+        source = reference @ rotation.T
+        aligned, _, diag = procrustes_align(source, reference, mode="per_sequence")
+        np.testing.assert_allclose(aligned, reference, atol=1e-8)
+        # The recovered rotation's magnitude should be the original 37°.
+        assert diag.rotation_deg == pytest.approx(37.0, abs=1e-4)
+
+    def test_recovers_known_translation(self) -> None:
+        reference = _skeleton()[np.newaxis, :, :].repeat(5, axis=0)
+        translation = np.array([10.0, -4.5, 2.25])
+        source = reference + translation
+        aligned, _, diag = procrustes_align(source, reference, mode="per_sequence")
+        np.testing.assert_allclose(aligned, reference, atol=1e-9)
+        # rotation_deg may be numerically tiny but not exactly 0.
+        assert diag.rotation_deg == pytest.approx(0.0, abs=1e-4)
+        assert diag.translation == pytest.approx(np.linalg.norm(translation), rel=1e-6)
+
+    def test_recovers_combined_rotation_and_translation(self) -> None:
+        rotation = _rotation_matrix_z(np.deg2rad(-12.0))
+        translation = np.array([1.0, 2.0, 3.0])
+        reference = _skeleton(num_joints=6)[np.newaxis, :, :].repeat(3, axis=0)
+        source = reference @ rotation.T + translation
+        aligned, _, diag = procrustes_align(source, reference, mode="per_sequence")
+        np.testing.assert_allclose(aligned, reference, atol=1e-8)
+        assert diag.rotation_deg == pytest.approx(12.0, abs=1e-4)
+        assert diag.translation == pytest.approx(np.linalg.norm(translation), rel=1e-4)
+
+    def test_scale_flag_recovers_known_scale(self) -> None:
+        reference = _skeleton()[np.newaxis, :, :].repeat(2, axis=0)
+        source = reference * 0.5
+        aligned, _, diag = procrustes_align(source, reference, mode="per_sequence", scale=True)
+        np.testing.assert_allclose(aligned, reference, atol=1e-8)
+        assert diag.scale == pytest.approx(2.0, rel=1e-6)
+
+    def test_scale_flag_off_leaves_scale_at_one(self) -> None:
+        reference = _skeleton()[np.newaxis, :, :].repeat(2, axis=0)
+        source = reference * 0.5
+        _, _, diag = procrustes_align(source, reference, mode="per_sequence", scale=False)
+        assert diag.scale == pytest.approx(1.0)
+
+    def test_rejects_mismatched_shapes(self) -> None:
+        a = np.zeros((4, 8, 3))
+        b = np.zeros((4, 7, 3))
+        with pytest.raises(ValueError, match="same shape"):
+            procrustes_align(a, b)
+
+    def test_rejects_wrong_trailing_axis(self) -> None:
+        a = np.zeros((4, 8, 2))
+        b = np.zeros((4, 8, 2))
+        with pytest.raises(ValueError, match="joints, 3"):
+            procrustes_align(a, b)
+
+    def test_rejects_unknown_mode(self) -> None:
+        a = np.zeros((2, 4, 3))
+        with pytest.raises(ValueError, match="unknown mode"):
+            procrustes_align(a, a, mode="nope")  # type: ignore[arg-type]
+
+    def test_does_not_mutate_inputs(self) -> None:
+        source = _skeleton()[np.newaxis, :, :].repeat(3, axis=0).copy()
+        target = (source @ _rotation_matrix_z(np.deg2rad(10.0)).T).copy()
+        source_before = source.copy()
+        target_before = target.copy()
+        procrustes_align(source, target, mode="per_sequence")
+        np.testing.assert_array_equal(source, source_before)
+        np.testing.assert_array_equal(target, target_before)
+
+    def test_returns_alignment_diagnostics_dataclass(self) -> None:
+        a = _skeleton()[np.newaxis, :, :].repeat(2, axis=0)
+        _, _, diag = procrustes_align(a, a)
+        assert isinstance(diag, AlignmentDiagnostics)
+
+
+class TestProcrustesAlignPerFrame:
+    def test_per_frame_recovers_varying_rotations(self) -> None:
+        # Each frame is rotated by a different angle; per_frame alignment
+        # should recover each frame independently.
+        num_frames = 4
+        reference_frame = _skeleton(num_joints=6)
+        angles = np.deg2rad([5.0, -10.0, 20.0, 45.0])
+        reference = np.stack([reference_frame for _ in range(num_frames)], axis=0)
+        source = np.stack([reference_frame @ _rotation_matrix_z(a).T for a in angles], axis=0)
+        aligned, _, diag = procrustes_align(source, reference, mode="per_frame")
+        np.testing.assert_allclose(aligned, reference, atol=1e-8)
+        assert diag.mode == "per_frame"
+        # The max rotation across frames should be 45°.
+        assert diag.rotation_deg_max == pytest.approx(45.0, abs=1e-4)
+        # The mean rotation across frames should be 20°.
+        assert diag.rotation_deg == pytest.approx(20.0, abs=1e-4)
+
+    def test_per_frame_with_identical_sequences_yields_zero(self) -> None:
+        sequence = _skeleton(num_joints=5)[np.newaxis, :, :].repeat(3, axis=0)
+        aligned, _, diag = procrustes_align(sequence, sequence, mode="per_frame")
+        np.testing.assert_allclose(aligned, sequence, atol=1e-10)
+        # Per-frame SVD on a symmetric covariance is numerically ambiguous
+        # in axis selection, so the fitted rotation can be a few micro-
+        # degrees off zero; the residual positions are still exact.
+        assert diag.rotation_deg == pytest.approx(0.0, abs=1e-3)
+        assert diag.rotation_deg_max == pytest.approx(0.0, abs=1e-3)
+        assert diag.translation == pytest.approx(0.0, abs=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# DTW with align= (integration)
+# ---------------------------------------------------------------------------
+
+
+class TestDtwAlignIntegration:
+    """Smoke tests: align= routes through procrustes_align correctly.
+
+    Depth tests of the DTW path itself live in test_analyzer_dtw.
+    """
+
+    def test_dtw_all_with_alignment_cancels_rigid_offset(self) -> None:
+        pytest.importorskip("fastdtw")
+        from neuropose.analyzer.dtw import dtw_all
+
+        rotation = _rotation_matrix_z(np.deg2rad(30.0))
+        translation = np.array([5.0, -2.0, 1.0])
+        reference = _skeleton(num_joints=6)[np.newaxis, :, :].repeat(4, axis=0)
+        source = reference @ rotation.T + translation
+        baseline = dtw_all(source, reference, align="none")
+        aligned_result = dtw_all(source, reference, align="procrustes_per_sequence")
+        assert baseline.distance > 0.0
+        assert aligned_result.distance == pytest.approx(0.0, abs=1e-6)
+
+    def test_dtw_align_rejects_mismatched_frame_counts(self) -> None:
+        pytest.importorskip("fastdtw")
+        from neuropose.analyzer.dtw import dtw_all
+
+        a = np.zeros((5, 3, 3))
+        b = np.zeros((6, 3, 3))
+        with pytest.raises(ValueError, match="matching frame counts"):
+            dtw_all(a, b, align="procrustes_per_sequence")

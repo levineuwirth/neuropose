@@ -14,6 +14,8 @@ The following helpers are provided:
   fit in the unit cube (either per-axis or uniform).
 - :func:`pad_sequences` — edge-pad a batch of sequences to a common
   length, suitable for downstream tensor-based analysis.
+- :func:`procrustes_align` — rigid-align one pose sequence to another
+  via the Kabsch algorithm, with optional uniform scaling.
 - :func:`extract_joint_angles` — compute joint angles at specified
   triplet positions across a pose sequence.
 - :func:`extract_feature_statistics` — summary statistics
@@ -26,11 +28,18 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
 from neuropose.io import VideoPredictions
+
+ProcrustesMode = Literal["per_frame", "per_sequence"]
+"""Mode selector for :func:`procrustes_align`.
+
+``per_sequence`` computes a single rigid transform over the whole
+sequence; ``per_frame`` aligns every frame independently.
+"""
 
 # ---------------------------------------------------------------------------
 # VideoPredictions → numpy
@@ -209,6 +218,247 @@ def pad_sequences(
             padding = [(0, pad_amount)] + [(0, 0)] * (seq.ndim - 1)
             padded.append(np.pad(seq, padding, mode="edge"))
     return padded
+
+
+# ---------------------------------------------------------------------------
+# Procrustes alignment (Kabsch)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AlignmentDiagnostics:
+    """Summary of the rigid transform fitted by :func:`procrustes_align`.
+
+    Attributes
+    ----------
+    mode
+        Which alignment mode produced this result; mirrors the ``mode``
+        argument passed to :func:`procrustes_align`.
+    rotation_deg
+        Magnitude of the fitted rotation, in degrees, computed as
+        ``arccos((trace(R) - 1) / 2)``. For ``per_frame`` mode this is
+        the mean magnitude across frames.
+    rotation_deg_max
+        Worst-case (maximum) rotation magnitude across frames.
+        Equal to :attr:`rotation_deg` in ``per_sequence`` mode.
+    translation
+        Magnitude of the fitted translation vector, in the same units
+        as the input (millimetres for MeTRAbs output). For ``per_frame``
+        mode this is the mean magnitude across frames.
+    translation_max
+        Worst-case (maximum) translation magnitude across frames.
+        Equal to :attr:`translation` in ``per_sequence`` mode.
+    scale
+        Applied uniform scale factor. Always ``1.0`` when
+        ``procrustes_align`` was called with ``scale=False``. In
+        ``per_frame`` mode this is the mean scale across frames.
+    """
+
+    mode: ProcrustesMode
+    rotation_deg: float
+    rotation_deg_max: float
+    translation: float
+    translation_max: float
+    scale: float
+
+
+def _kabsch_single(
+    source: np.ndarray,
+    target: np.ndarray,
+    *,
+    scale: bool,
+) -> tuple[np.ndarray, np.ndarray, float, np.ndarray]:
+    """Fit the optimal rigid (+ optional uniform scale) transform.
+
+    Aligns ``source`` to ``target`` via the closed-form Kabsch
+    algorithm and returns ``(aligned_source, R, s, t)`` where
+    ``aligned_source = s * (source - centroid_source) @ R.T + centroid_target + t_fine``
+    (with ``t_fine`` absorbed for convenience — aligned points match
+    the target's centroid to within floating-point error).
+
+    Parameters
+    ----------
+    source
+        ``(N, 3)`` point set to align.
+    target
+        ``(N, 3)`` reference point set. Must have the same shape as
+        ``source``.
+    scale
+        If ``True``, fit a uniform scale factor; otherwise lock to
+        ``1.0``.
+
+    Returns
+    -------
+    aligned_source
+        ``(N, 3)`` aligned copy of ``source``.
+    R
+        ``(3, 3)`` rotation matrix.
+    s
+        Scalar scale factor (``1.0`` when ``scale=False``).
+    t
+        ``(3,)`` translation vector in world coordinates such that
+        ``aligned_source[i] = s * R @ source[i] + t``.
+    """
+    centroid_source = source.mean(axis=0)
+    centroid_target = target.mean(axis=0)
+    source_centered = source - centroid_source
+    target_centered = target - centroid_target
+
+    covariance = source_centered.T @ target_centered
+    u_mat, sigma, vt_mat = np.linalg.svd(covariance)
+    reflection_sign = float(np.sign(np.linalg.det(vt_mat.T @ u_mat.T)))
+    # Guard against the degenerate det == 0 case (coplanar points).
+    if reflection_sign == 0.0:
+        reflection_sign = 1.0
+    diag = np.diag([1.0, 1.0, reflection_sign])
+    rotation = vt_mat.T @ diag @ u_mat.T
+
+    if scale:
+        source_var = float((source_centered**2).sum())
+        if source_var <= 0.0:
+            scale_factor = 1.0
+        else:
+            scale_factor = float((sigma * np.array([1.0, 1.0, reflection_sign])).sum() / source_var)
+    else:
+        scale_factor = 1.0
+
+    translation = centroid_target - scale_factor * rotation @ centroid_source
+    aligned = scale_factor * source @ rotation.T + translation
+    return aligned, rotation, scale_factor, translation
+
+
+def _rotation_magnitude_deg(rotation: np.ndarray) -> float:
+    """Return the rotation angle (degrees) represented by ``rotation``.
+
+    Uses the axis-angle relation ``cos(theta) = (trace(R) - 1) / 2``.
+    """
+    cos_theta = (float(np.trace(rotation)) - 1.0) / 2.0
+    cos_theta = max(-1.0, min(1.0, cos_theta))
+    return float(np.degrees(np.arccos(cos_theta)))
+
+
+def procrustes_align(
+    source: np.ndarray,
+    target: np.ndarray,
+    *,
+    mode: ProcrustesMode = "per_sequence",
+    scale: bool = False,
+) -> tuple[np.ndarray, np.ndarray, AlignmentDiagnostics]:
+    """Rigid-align ``source`` to ``target`` via the Kabsch algorithm.
+
+    Fits the optimal rigid transform (optionally including uniform
+    scaling) that minimizes the sum of squared distances between
+    corresponding joints. The transform is always applied to
+    ``source``; ``target`` is returned unchanged alongside it for
+    symmetry with downstream DTW callers, which typically consume both
+    aligned arrays as a pair.
+
+    Parameters
+    ----------
+    source
+        Pose sequence to align, shape ``(frames, joints, 3)``.
+    target
+        Reference pose sequence, shape ``(frames, joints, 3)``. For
+        ``per_frame`` mode the frame counts must match; for
+        ``per_sequence`` mode they must also match (the correspondence
+        runs frame-by-frame and joint-by-joint). Use
+        :func:`pad_sequences` first if your sequences have different
+        lengths.
+    mode
+        ``"per_sequence"`` (default) fits a single rigid transform over
+        the whole sequence — good when the recording geometry is
+        stable across frames. ``"per_frame"`` fits an independent
+        transform per frame — good for matching pose shape while
+        discarding global trajectory.
+    scale
+        If ``True``, also fit a uniform scale factor. Useful for
+        cross-subject comparisons where the reference skeleton has a
+        different overall size.
+
+    Returns
+    -------
+    aligned_source
+        ``source`` transformed to align with ``target``, same shape as
+        the input.
+    target
+        The ``target`` array, unchanged.
+    diagnostics
+        :class:`AlignmentDiagnostics` summarising the fitted transform.
+
+    Raises
+    ------
+    ValueError
+        If ``source`` and ``target`` have different shapes or the
+        trailing axis is not of size 3.
+
+    Notes
+    -----
+    The Kabsch algorithm (Kabsch 1976, "A solution for the best
+    rotation to relate two sets of vectors") is a closed-form SVD
+    solution and does not iterate. Reflection is explicitly prevented
+    via a sign correction on the smallest singular value; the fitted
+    matrix is always a proper rotation (det = +1).
+
+    In ``per_frame`` mode, rotation, translation, and scale
+    diagnostics are reported as means across frames, with
+    :attr:`AlignmentDiagnostics.rotation_deg_max` and
+    :attr:`AlignmentDiagnostics.translation_max` exposing the worst
+    frame for anomaly detection.
+    """
+    if source.ndim != 3 or source.shape[-1] != 3:
+        raise ValueError(f"expected (frames, joints, 3); got source shape {source.shape}")
+    if source.shape != target.shape:
+        raise ValueError(
+            f"source and target must have the same shape; got {source.shape} and {target.shape}"
+        )
+
+    source = source.astype(float, copy=False)
+    target = target.astype(float, copy=False)
+    num_frames = source.shape[0]
+
+    if mode == "per_sequence":
+        flat_source = source.reshape(-1, 3)
+        flat_target = target.reshape(-1, 3)
+        aligned_flat, rotation, scale_factor, translation = _kabsch_single(
+            flat_source, flat_target, scale=scale
+        )
+        aligned = aligned_flat.reshape(source.shape)
+        rotation_deg = _rotation_magnitude_deg(rotation)
+        translation_mag = float(np.linalg.norm(translation))
+        diagnostics = AlignmentDiagnostics(
+            mode="per_sequence",
+            rotation_deg=rotation_deg,
+            rotation_deg_max=rotation_deg,
+            translation=translation_mag,
+            translation_max=translation_mag,
+            scale=scale_factor,
+        )
+        return aligned, target, diagnostics
+
+    if mode == "per_frame":
+        aligned = np.empty_like(source)
+        rotation_degs = np.empty(num_frames, dtype=float)
+        translations = np.empty(num_frames, dtype=float)
+        scales = np.empty(num_frames, dtype=float)
+        for frame_idx in range(num_frames):
+            aligned_frame, rotation, scale_factor, translation = _kabsch_single(
+                source[frame_idx], target[frame_idx], scale=scale
+            )
+            aligned[frame_idx] = aligned_frame
+            rotation_degs[frame_idx] = _rotation_magnitude_deg(rotation)
+            translations[frame_idx] = float(np.linalg.norm(translation))
+            scales[frame_idx] = scale_factor
+        diagnostics = AlignmentDiagnostics(
+            mode="per_frame",
+            rotation_deg=float(rotation_degs.mean()) if num_frames else 0.0,
+            rotation_deg_max=float(rotation_degs.max()) if num_frames else 0.0,
+            translation=float(translations.mean()) if num_frames else 0.0,
+            translation_max=float(translations.max()) if num_frames else 0.0,
+            scale=float(scales.mean()) if num_frames else 1.0,
+        )
+        return aligned, target, diagnostics
+
+    raise ValueError(f"unknown mode {mode!r}; expected 'per_frame' or 'per_sequence'")
 
 
 # ---------------------------------------------------------------------------

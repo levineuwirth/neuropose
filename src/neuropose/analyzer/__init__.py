@@ -28,19 +28,23 @@ here for ergonomic access.
 from __future__ import annotations
 
 from neuropose.analyzer.dtw import (
+    AlignMode,
     DTWResult,
     dtw_all,
     dtw_per_joint,
     dtw_relation,
 )
 from neuropose.analyzer.features import (
+    AlignmentDiagnostics,
     FeatureStatistics,
+    ProcrustesMode,
     extract_feature_statistics,
     extract_joint_angles,
     find_peaks,
     normalize_pose_sequence,
     pad_sequences,
     predictions_to_numpy,
+    procrustes_align,
 )
 from neuropose.analyzer.segment import (
     JOINT_INDEX,
@@ -59,8 +63,11 @@ from neuropose.analyzer.segment import (
 __all__ = [
     "JOINT_INDEX",
     "JOINT_NAMES",
+    "AlignMode",
+    "AlignmentDiagnostics",
     "DTWResult",
     "FeatureStatistics",
+    "ProcrustesMode",
     "dtw_all",
     "dtw_per_joint",
     "dtw_relation",
@@ -76,6 +83,7 @@ __all__ = [
     "normalize_pose_sequence",
     "pad_sequences",
     "predictions_to_numpy",
+    "procrustes_align",
     "segment_by_peaks",
     "segment_predictions",
     "slice_predictions",
