@@ -239,6 +239,22 @@ be split into per-release sections once tagging begins.
   distance is rotation- and translation-invariant. Paper C's
   pipeline is expected to set `align="procrustes_per_sequence"`;
   see `TECHNICAL.md` Phase 0.
+- **`neuropose.analyzer.segment.segment_gait_cycles`** and
+  **`segment_gait_cycles_bilateral`** — clinical convenience
+  wrappers over `segment_predictions` that pre-fill a `joint_axis`
+  extractor with gait-appropriate defaults (`joint="rhee"`,
+  `axis="y"`, `min_cycle_seconds=0.4`). The single-side entry point
+  accepts any berkeley_mhad_43 joint name and any spatial axis as a
+  string literal `"x" | "y" | "z"`, plus an `invert` flag for
+  recordings whose vertical axis runs opposite to MeTRAbs's
+  Y-down world-coordinate convention. The bilateral wrapper runs
+  the detection on both `lhee` and `rhee` and returns the two
+  results under `"left_heel_strikes"` / `"right_heel_strikes"`
+  keys — shape-compatible with `VideoPredictions.segmentations` so
+  the dict can be merged in directly. Degrades gracefully on
+  pathological gaits (shuffling, walker-assisted) by returning an
+  empty segments list rather than raising. Closes the gait-cycle
+  segmentation item in `TECHNICAL.md` Phase 0.
 - **`neuropose.io.Provenance`** — reproducibility envelope for every
   inference run. Populated automatically by `Estimator.process_video`
   when the model was loaded via `load_model` (the production path)
@@ -316,7 +332,11 @@ be split into per-release sections once tagging begins.
     time-based parameters to frame counts via `metadata.fps`), and
     `slice_predictions` (split a `VideoPredictions` into one per
     detected repetition with re-keyed frame names and a rewritten
-    `frame_count`). Ships four extractor factories —
+    `frame_count`). Gait-specific convenience wrappers
+    `segment_gait_cycles` (single heel) and
+    `segment_gait_cycles_bilateral` (both heels, returning a dict
+    keyed by `"left_heel_strikes"` / `"right_heel_strikes"`) sit
+    above `segment_predictions` with clinical defaults. Ships four extractor factories —
     `joint_axis`, `joint_pair_distance`, `joint_speed`, and
     `joint_angle` — plus a `JOINT_NAMES` constant for the
     berkeley_mhad_43 skeleton with a `joint_index(name)` lookup,

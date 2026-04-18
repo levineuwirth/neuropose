@@ -30,6 +30,12 @@ Three layers of API are provided, in increasing order of convenience:
   :class:`~neuropose.io.ExtractorSpec`, converts time-based parameters
   to frame counts using ``metadata.fps``, and returns a full
   :class:`~neuropose.io.Segmentation` ready to attach to the predictions.
+- :func:`segment_gait_cycles` and :func:`segment_gait_cycles_bilateral`
+  — clinical convenience wrappers over :func:`segment_predictions`
+  that pre-fill a :func:`joint_axis` extractor with gait-appropriate
+  defaults (heel joint, Y axis, 0.4 s minimum cycle). The bilateral
+  variant returns both sides under ``"left_heel_strikes"`` and
+  ``"right_heel_strikes"`` keys.
 - :func:`slice_predictions` — split a :class:`~neuropose.io.VideoPredictions`
   into one per-repetition :class:`~neuropose.io.VideoPredictions`,
   useful when downstream code wants per-rep objects rather than windows
@@ -66,6 +72,7 @@ installed; a clear :class:`ImportError` surfaces at the first call to
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Literal
 
 import numpy as np
 
@@ -82,6 +89,11 @@ from neuropose.io import (
     VideoMetadata,
     VideoPredictions,
 )
+
+AxisLetter = Literal["x", "y", "z"]
+"""Axis selector used by gait-cycle segmentation helpers."""
+
+_AXIS_INDICES: dict[AxisLetter, int] = {"x": 0, "y": 1, "z": 2}
 
 # ---------------------------------------------------------------------------
 # berkeley_mhad_43 joint names
@@ -520,6 +532,156 @@ def segment_predictions(
         pad_seconds=pad_seconds,
     )
     return Segmentation(config=config, segments=segments)
+
+
+# ---------------------------------------------------------------------------
+# Gait-cycle segmentation
+# ---------------------------------------------------------------------------
+
+
+def segment_gait_cycles(
+    predictions: VideoPredictions,
+    *,
+    joint: str = "rhee",
+    axis: AxisLetter = "y",
+    invert: bool = False,
+    min_cycle_seconds: float = 0.4,
+    min_prominence: float | None = None,
+) -> Segmentation:
+    """Segment gait cycles from a single heel's vertical trace.
+
+    Runs valley-to-valley peak detection (the same engine used by
+    :func:`segment_predictions`) on the chosen joint's coordinate along
+    the chosen spatial axis. By default, each detected peak corresponds
+    to one heel-strike — the frame where the heel reaches its lowest
+    point on the Y-down MeTRAbs world-coordinate convention — and the
+    returned :class:`~neuropose.io.Segment` windows span one full gait
+    cycle from the preceding toe-off valley to the following toe-off
+    valley.
+
+    The function is a **thin wrapper** over :func:`segment_predictions`
+    with a :func:`joint_axis` extractor; it exists to give clinical
+    callers a gait-specific entry point with meaningful defaults
+    (``joint="rhee"``, ``axis="y"``, ``min_cycle_seconds=0.4``)
+    rather than forcing them to construct the extractor by hand.
+
+    Parameters
+    ----------
+    predictions
+        Per-video predictions to segment. ``metadata.fps`` is used to
+        translate ``min_cycle_seconds`` into a sample-count distance
+        threshold.
+    joint
+        Joint name in the berkeley_mhad_43 skeleton — typically
+        ``"rhee"`` (right heel) or ``"lhee"`` (left heel). Resolved
+        via :func:`joint_index`.
+    axis
+        Spatial axis to track, as ``"x"``, ``"y"``, or ``"z"``. The
+        default ``"y"`` matches the vertical axis in MeTRAbs's output
+        (Y-down world coordinates).
+    invert
+        If ``True``, negate the extracted signal so that minima
+        become peaks. Needed when the recording convention makes a
+        heel-strike appear as a *decrease* in the chosen coordinate
+        — for example, a camera orientation where the vertical axis
+        runs bottom-to-top instead of MeTRAbs's default top-to-bottom.
+    min_cycle_seconds
+        Minimum gait-cycle duration. Used as scipy's
+        ``find_peaks(distance=...)`` parameter after conversion to
+        frame count via ``metadata.fps``. Defaults to ``0.4`` seconds,
+        which rejects noise peaks on even the fastest human gaits
+        (~120 strides/min) while retaining every real cadence.
+    min_prominence
+        Forwarded to :func:`segment_by_peaks` to filter out shallow
+        local maxima that aren't real heel-strikes. In MeTRAbs units
+        (millimetres) a threshold of 20 to 50 mm is typical for
+        able-bodied gait; leave ``None`` to accept every peak scipy
+        identifies.
+
+    Returns
+    -------
+    Segmentation
+        A :class:`~neuropose.io.Segmentation` paired with the full
+        :class:`~neuropose.io.SegmentationConfig` that produced it, so
+        the output is self-describing when persisted. The segments
+        list is **empty** rather than an exception when no peaks are
+        detected — a common outcome for shuffling gaits or
+        walker-assisted trials.
+
+    Raises
+    ------
+    KeyError
+        If ``joint`` is not a known berkeley_mhad_43 joint name.
+    ValueError
+        If ``axis`` is not one of ``"x"``, ``"y"``, ``"z"``, or if
+        ``predictions`` has zero frames, or if ``metadata.fps`` is
+        non-positive.
+    ImportError
+        If :mod:`scipy` is not installed.
+    """
+    if axis not in _AXIS_INDICES:
+        raise ValueError(f"axis must be one of 'x', 'y', 'z'; got {axis!r}")
+    joint_idx = joint_index(joint)
+    axis_idx = _AXIS_INDICES[axis]
+    extractor = joint_axis(joint_idx, axis_idx, invert=invert)
+    return segment_predictions(
+        predictions,
+        extractor,
+        min_distance_seconds=min_cycle_seconds,
+        min_prominence=min_prominence,
+    )
+
+
+def segment_gait_cycles_bilateral(
+    predictions: VideoPredictions,
+    *,
+    axis: AxisLetter = "y",
+    invert: bool = False,
+    min_cycle_seconds: float = 0.4,
+    min_prominence: float | None = None,
+) -> dict[str, Segmentation]:
+    """Segment gait cycles for both heels.
+
+    Runs :func:`segment_gait_cycles` twice — once with ``joint="lhee"``
+    and once with ``joint="rhee"`` — and returns the two results under
+    the keys ``"left_heel_strikes"`` and ``"right_heel_strikes"``. The
+    returned dict is shape-compatible with
+    :class:`~neuropose.io.VideoPredictions.segmentations` so it can be
+    merged directly into a predictions object and persisted to
+    ``results.json`` via the usual save path.
+
+    Parameters
+    ----------
+    predictions, axis, invert, min_cycle_seconds, min_prominence
+        Forwarded to :func:`segment_gait_cycles`; see that function's
+        docstring for details.
+
+    Returns
+    -------
+    dict[str, Segmentation]
+        Two-keyed mapping with the left and right heel segmentations
+        under ``"left_heel_strikes"`` and ``"right_heel_strikes"``.
+        Either side may carry an empty segments list if its heel's
+        trace contained no detectable strikes.
+    """
+    return {
+        "left_heel_strikes": segment_gait_cycles(
+            predictions,
+            joint="lhee",
+            axis=axis,
+            invert=invert,
+            min_cycle_seconds=min_cycle_seconds,
+            min_prominence=min_prominence,
+        ),
+        "right_heel_strikes": segment_gait_cycles(
+            predictions,
+            joint="rhee",
+            axis=axis,
+            invert=invert,
+            min_cycle_seconds=min_cycle_seconds,
+            min_prominence=min_prominence,
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------

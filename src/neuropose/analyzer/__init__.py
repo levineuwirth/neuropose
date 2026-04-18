@@ -49,6 +49,7 @@ from neuropose.analyzer.features import (
 from neuropose.analyzer.segment import (
     JOINT_INDEX,
     JOINT_NAMES,
+    AxisLetter,
     extract_signal,
     joint_angle,
     joint_axis,
@@ -56,6 +57,8 @@ from neuropose.analyzer.segment import (
     joint_pair_distance,
     joint_speed,
     segment_by_peaks,
+    segment_gait_cycles,
+    segment_gait_cycles_bilateral,
     segment_predictions,
     slice_predictions,
 )
@@ -65,6 +68,7 @@ __all__ = [
     "JOINT_NAMES",
     "AlignMode",
     "AlignmentDiagnostics",
+    "AxisLetter",
     "DTWResult",
     "FeatureStatistics",
     "ProcrustesMode",
@@ -85,6 +89,8 @@ __all__ = [
     "predictions_to_numpy",
     "procrustes_align",
     "segment_by_peaks",
+    "segment_gait_cycles",
+    "segment_gait_cycles_bilateral",
     "segment_predictions",
     "slice_predictions",
 ]

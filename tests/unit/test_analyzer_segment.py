@@ -33,6 +33,8 @@ from neuropose.analyzer.segment import (
     joint_pair_distance,
     joint_speed,
     segment_by_peaks,
+    segment_gait_cycles,
+    segment_gait_cycles_bilateral,
     segment_predictions,
     slice_predictions,
 )
@@ -429,3 +431,139 @@ class TestSlicePredictions:
         sliced = slice_predictions(preds, segments)[0]
         # frame_000000 of the slice must equal frame_000050 of the source
         assert sliced["frame_000000"].poses3d == preds["frame_000050"].poses3d
+
+
+# ---------------------------------------------------------------------------
+# segment_gait_cycles / segment_gait_cycles_bilateral
+# ---------------------------------------------------------------------------
+
+
+def _heel_signal(num_cycles: int, frames_per_cycle: int) -> np.ndarray:
+    """A clean sinusoid standing in for a heel's vertical trace."""
+    total = num_cycles * frames_per_cycle
+    t = np.linspace(0.0, num_cycles * 2.0 * math.pi, total, endpoint=False)
+    # Amplitude chosen so min_prominence tests have a non-trivial range.
+    return (np.sin(t) * 100.0 + 100.0).astype(float)
+
+
+class TestSegmentGaitCycles:
+    def test_detects_expected_number_of_cycles(self) -> None:
+        # 5 cycles at 30 fps, 30 frames per cycle = 1.0 s per stride.
+        # Well inside the default min_cycle_seconds=0.4 gate.
+        signal = _heel_signal(num_cycles=5, frames_per_cycle=30)
+        preds = _make_predictions(signal, joint=JOINT_INDEX["rhee"])
+        seg = segment_gait_cycles(preds, joint="rhee", axis="y")
+        assert len(seg.segments) == 5
+
+    def test_config_records_inputs(self) -> None:
+        signal = _heel_signal(num_cycles=3, frames_per_cycle=30)
+        preds = _make_predictions(signal, joint=JOINT_INDEX["rhee"])
+        seg = segment_gait_cycles(
+            preds,
+            joint="rhee",
+            axis="y",
+            min_cycle_seconds=0.5,
+            min_prominence=10.0,
+        )
+        assert isinstance(seg, Segmentation)
+        assert isinstance(seg.config.extractor, JointAxisExtractor)
+        assert seg.config.extractor.joint == JOINT_INDEX["rhee"]
+        assert seg.config.extractor.axis == 1  # "y" → 1
+        assert seg.config.extractor.invert is False
+        assert seg.config.min_distance_seconds == 0.5
+        assert seg.config.min_prominence == 10.0
+
+    def test_axis_selection(self) -> None:
+        # Put the signal on the X axis instead of Y.
+        signal = _heel_signal(num_cycles=4, frames_per_cycle=30)
+        preds = _make_predictions(signal, joint=JOINT_INDEX["rhee"], axis=0)
+        seg_y = segment_gait_cycles(preds, joint="rhee", axis="y")
+        seg_x = segment_gait_cycles(preds, joint="rhee", axis="x")
+        # Y is all-zeros (flat → no peaks), X carries the signal.
+        assert len(seg_y.segments) == 0
+        assert len(seg_x.segments) == 4
+
+    def test_invert_flips_peaks_and_valleys(self) -> None:
+        # Invert the heel trace; with invert=True, the original valleys
+        # become the peaks detected as heel-strikes.
+        signal = _heel_signal(num_cycles=4, frames_per_cycle=30)
+        preds = _make_predictions(signal, joint=JOINT_INDEX["rhee"])
+        seg_plain = segment_gait_cycles(preds, joint="rhee", axis="y", invert=False)
+        seg_inverted = segment_gait_cycles(preds, joint="rhee", axis="y", invert=True)
+        # Both detect four distinct events (peaks in either the signal
+        # or its negation). Peaks differ by roughly half a cycle.
+        assert len(seg_plain.segments) == 4
+        assert len(seg_inverted.segments) == 4
+        plain_peaks = [s.peak for s in seg_plain.segments]
+        inverted_peaks = [s.peak for s in seg_inverted.segments]
+        assert plain_peaks != inverted_peaks
+
+    def test_pathological_flat_signal_returns_empty(self) -> None:
+        # A subject whose heel never leaves the ground — no peaks.
+        signal = np.zeros(120)
+        preds = _make_predictions(signal, joint=JOINT_INDEX["rhee"])
+        seg = segment_gait_cycles(preds, joint="rhee", axis="y")
+        assert seg.segments == []
+
+    def test_min_cycle_seconds_rejects_close_peaks(self) -> None:
+        # 10 cycles in 60 frames @ 30 fps = 0.2 s per cycle.
+        # min_cycle_seconds=0.4 should reject all but every-other peak.
+        signal = _heel_signal(num_cycles=10, frames_per_cycle=6)
+        preds = _make_predictions(signal, joint=JOINT_INDEX["rhee"])
+        seg_permissive = segment_gait_cycles(preds, joint="rhee", min_cycle_seconds=0.0)
+        seg_strict = segment_gait_cycles(preds, joint="rhee", min_cycle_seconds=0.4)
+        # Strict mode drops peaks that are too close together.
+        assert len(seg_strict.segments) < len(seg_permissive.segments)
+
+    def test_unknown_joint_raises_key_error(self) -> None:
+        signal = _heel_signal(num_cycles=3, frames_per_cycle=30)
+        preds = _make_predictions(signal, joint=JOINT_INDEX["rhee"])
+        with pytest.raises(KeyError, match="unknown joint"):
+            segment_gait_cycles(preds, joint="left_heel")  # wrong name
+
+    def test_invalid_axis_raises_value_error(self) -> None:
+        signal = _heel_signal(num_cycles=3, frames_per_cycle=30)
+        preds = _make_predictions(signal, joint=JOINT_INDEX["rhee"])
+        with pytest.raises(ValueError, match="axis must be one of"):
+            segment_gait_cycles(preds, joint="rhee", axis="w")  # type: ignore[arg-type]
+
+
+class TestSegmentGaitCyclesBilateral:
+    def test_returns_both_keys(self) -> None:
+        signal = _heel_signal(num_cycles=3, frames_per_cycle=30)
+        # Put the same signal on both heels so both sides find cycles.
+        preds = _make_predictions(signal, joint=JOINT_INDEX["rhee"])
+        # Rebuild predictions with lhee populated too.
+        frames = {}
+        for i, value in enumerate(signal):
+            poses = [[[0.0, 0.0, 0.0] for _ in range(NUM_JOINTS)]]
+            poses[0][JOINT_INDEX["lhee"]][1] = float(value)
+            poses[0][JOINT_INDEX["rhee"]][1] = float(value)
+            frames[f"frame_{i:06d}"] = {
+                "boxes": [[0.0, 0.0, 1.0, 1.0, 0.9]],
+                "poses3d": poses,
+                "poses2d": [[[0.0, 0.0]] * NUM_JOINTS],
+            }
+        preds = VideoPredictions.model_validate(
+            {
+                "metadata": {
+                    "frame_count": len(signal),
+                    "fps": 30.0,
+                    "width": 640,
+                    "height": 480,
+                },
+                "frames": frames,
+            }
+        )
+        result = segment_gait_cycles_bilateral(preds)
+        assert set(result.keys()) == {"left_heel_strikes", "right_heel_strikes"}
+        assert len(result["left_heel_strikes"].segments) == 3
+        assert len(result["right_heel_strikes"].segments) == 3
+
+    def test_pathological_one_side_returns_empty_for_that_side(self) -> None:
+        # Only the right heel carries a signal; left heel is flat.
+        signal = _heel_signal(num_cycles=3, frames_per_cycle=30)
+        preds = _make_predictions(signal, joint=JOINT_INDEX["rhee"])
+        result = segment_gait_cycles_bilateral(preds)
+        assert len(result["right_heel_strikes"].segments) == 3
+        assert result["left_heel_strikes"].segments == []
