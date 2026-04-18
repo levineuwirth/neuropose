@@ -30,6 +30,8 @@ from __future__ import annotations
 from neuropose.analyzer.dtw import (
     AlignMode,
     DTWResult,
+    NanPolicy,
+    Representation,
     dtw_all,
     dtw_per_joint,
     dtw_relation,
@@ -71,7 +73,9 @@ __all__ = [
     "AxisLetter",
     "DTWResult",
     "FeatureStatistics",
+    "NanPolicy",
     "ProcrustesMode",
+    "Representation",
     "dtw_all",
     "dtw_per_joint",
     "dtw_relation",

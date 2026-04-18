@@ -131,3 +131,250 @@ class TestDtwRelation:
         b = np.zeros((3, 2, 3))
         with pytest.raises(ValueError, match="joint count"):
             dtw_relation(a, b, joint_i=0, joint_j=1)
+
+
+# ---------------------------------------------------------------------------
+# representation="angles"
+# ---------------------------------------------------------------------------
+
+
+def _rotation_matrix_z(angle_rad: float) -> np.ndarray:
+    c, s = np.cos(angle_rad), np.sin(angle_rad)
+    return np.array(
+        [
+            [c, -s, 0.0],
+            [s, c, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+
+
+def _three_joint_arm(num_frames: int = 6) -> np.ndarray:
+    """A three-joint arm opening from a right angle to straight.
+
+    Joints laid out as [shoulder, elbow, wrist], forming an angle at
+    the elbow that linearly opens from pi/2 to pi across ``num_frames``.
+    """
+    sequence = np.zeros((num_frames, 3, 3))
+    angles = np.linspace(np.pi / 2, np.pi, num_frames)
+    for i, theta in enumerate(angles):
+        sequence[i, 0] = [-1.0, 0.0, 0.0]  # shoulder
+        sequence[i, 1] = [0.0, 0.0, 0.0]  # elbow
+        sequence[i, 2] = [np.cos(theta - np.pi), np.sin(theta - np.pi), 0.0]  # wrist
+    return sequence
+
+
+class TestDtwAllAngles:
+    def test_angles_identical_sequences_distance_zero(self) -> None:
+        seq = _three_joint_arm()
+        result = dtw_all(
+            seq,
+            seq,
+            representation="angles",
+            angle_triplets=[(0, 1, 2)],
+        )
+        assert result.distance == pytest.approx(0.0, abs=1e-9)
+
+    def test_angles_invariant_to_global_rotation(self) -> None:
+        """Angle-space DTW must not change under a global rotation."""
+        seq = _three_joint_arm()
+        rotated = seq @ _rotation_matrix_z(np.deg2rad(40.0)).T
+        baseline = dtw_all(seq, seq, representation="angles", angle_triplets=[(0, 1, 2)])
+        under_rotation = dtw_all(
+            seq,
+            rotated,
+            representation="angles",
+            angle_triplets=[(0, 1, 2)],
+        )
+        assert baseline.distance == pytest.approx(under_rotation.distance, abs=1e-6)
+
+    def test_angles_translation_invariant(self) -> None:
+        seq = _three_joint_arm()
+        translated = seq + np.array([10.0, -5.0, 2.0])
+        result = dtw_all(
+            seq,
+            translated,
+            representation="angles",
+            angle_triplets=[(0, 1, 2)],
+        )
+        assert result.distance == pytest.approx(0.0, abs=1e-9)
+
+    def test_angles_detects_different_motion(self) -> None:
+        # A sequence whose angle is constant vs. one that opens.
+        constant = np.zeros((6, 3, 3))
+        constant[:, 0] = [-1.0, 0.0, 0.0]
+        constant[:, 1] = [0.0, 0.0, 0.0]
+        constant[:, 2] = [0.0, 1.0, 0.0]  # right angle throughout
+        opening = _three_joint_arm()
+        result = dtw_all(
+            constant,
+            opening,
+            representation="angles",
+            angle_triplets=[(0, 1, 2)],
+        )
+        assert result.distance > 0.0
+
+    def test_angles_without_triplets_rejected(self) -> None:
+        seq = _three_joint_arm()
+        with pytest.raises(ValueError, match="angle_triplets"):
+            dtw_all(seq, seq, representation="angles")
+
+
+class TestDtwPerJointAngles:
+    def test_returns_one_result_per_triplet(self) -> None:
+        seq = _three_joint_arm()
+        triplets = [(0, 1, 2), (0, 1, 2)]  # duplicate triplet on purpose
+        results = dtw_per_joint(
+            seq,
+            seq,
+            representation="angles",
+            angle_triplets=triplets,
+        )
+        assert len(results) == 2
+        for result in results:
+            assert result.distance == pytest.approx(0.0, abs=1e-9)
+
+    def test_per_triplet_distinct_paths(self) -> None:
+        # Two triplets covering different angles; with different motion
+        # per triplet, the per-unit results should differ.
+        seq_a = np.zeros((5, 4, 3))
+        seq_b = np.zeros((5, 4, 3))
+        # joint 0: pivot, joint 1/2/3: arm endpoints
+        for i in range(5):
+            seq_a[i, 0] = [0.0, 0.0, 0.0]
+            seq_a[i, 1] = [1.0, 0.0, 0.0]
+            seq_a[i, 2] = [0.0, 1.0, 0.0]
+            seq_a[i, 3] = [0.0, 0.0, 1.0]
+            seq_b[i, 0] = [0.0, 0.0, 0.0]
+            seq_b[i, 1] = [1.0, 0.0, 0.0]
+            seq_b[i, 2] = [np.cos(i * 0.3), np.sin(i * 0.3), 0.0]  # rotating
+            seq_b[i, 3] = [0.0, 0.0, 1.0]
+        results = dtw_per_joint(
+            seq_a,
+            seq_b,
+            representation="angles",
+            angle_triplets=[(1, 0, 2), (1, 0, 3)],
+        )
+        assert len(results) == 2
+        # First triplet tracks the rotation, second is stationary.
+        assert results[0].distance > 0.0
+        assert results[1].distance == pytest.approx(0.0, abs=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# nan_policy
+# ---------------------------------------------------------------------------
+
+
+def _collinear_sequence(num_frames: int = 4) -> np.ndarray:
+    """Three collinear joints — the angle at the middle joint is degenerate."""
+    seq = np.zeros((num_frames, 3, 3))
+    seq[:, 0] = [-1.0, 0.0, 0.0]
+    # Middle joint at (0,0,0); but because the outer joints are collinear
+    # through the origin, we need one joint overlapping with the middle
+    # to force a zero-length vector. Place joint 2 AT joint 1 to trigger
+    # the degenerate case in extract_joint_angles.
+    seq[:, 1] = [0.0, 0.0, 0.0]
+    seq[:, 2] = [0.0, 0.0, 0.0]
+    return seq
+
+
+class TestNanPolicy:
+    def test_propagate_surfaces_error(self) -> None:
+        # Degenerate triplet produces NaN angles for every frame.
+        # With nan_policy="propagate" the NaN reaches fastdtw, which
+        # validates via numpy.asarray_chkfinite and raises ValueError —
+        # the intended behaviour ("make the problem visible").
+        seq = _collinear_sequence(num_frames=4)
+        other = _three_joint_arm(num_frames=4)
+        with pytest.raises(ValueError, match="infs or NaNs"):
+            dtw_all(
+                seq,
+                other,
+                representation="angles",
+                angle_triplets=[(0, 1, 2)],
+                nan_policy="propagate",
+            )
+
+    def test_interpolate_fills_isolated_nan(self) -> None:
+        # One bad frame in a 5-frame sequence — the other four are
+        # finite anchors to interpolate between.
+        good = _three_joint_arm(num_frames=5)
+        # Inject a degenerate middle frame.
+        good[2, 2] = good[2, 1]  # force zero-length vector → NaN angle
+        # Reference is the same arm without injection.
+        reference = _three_joint_arm(num_frames=5)
+        result = dtw_all(
+            good,
+            reference,
+            representation="angles",
+            angle_triplets=[(0, 1, 2)],
+            nan_policy="interpolate",
+        )
+        assert not np.isnan(result.distance)
+
+    def test_interpolate_all_nan_column_rejected(self) -> None:
+        seq = _collinear_sequence(num_frames=5)
+        other = _three_joint_arm(num_frames=5)
+        with pytest.raises(ValueError, match="all values are NaN"):
+            dtw_all(
+                seq,
+                other,
+                representation="angles",
+                angle_triplets=[(0, 1, 2)],
+                nan_policy="interpolate",
+            )
+
+    def test_drop_removes_nan_frames(self) -> None:
+        good = _three_joint_arm(num_frames=6)
+        good[2, 2] = good[2, 1]  # inject NaN at frame 2
+        good[4, 2] = good[4, 1]  # inject NaN at frame 4
+        reference = _three_joint_arm(num_frames=6)
+        result = dtw_all(
+            good,
+            reference,
+            representation="angles",
+            angle_triplets=[(0, 1, 2)],
+            nan_policy="drop",
+        )
+        # The 4 remaining finite frames should align cleanly with
+        # their counterparts in the reference.
+        assert not np.isnan(result.distance)
+
+    def test_drop_empties_sequence_rejected(self) -> None:
+        seq = _collinear_sequence(num_frames=5)
+        other = _three_joint_arm(num_frames=5)
+        with pytest.raises(ValueError, match="every frame"):
+            dtw_all(
+                seq,
+                other,
+                representation="angles",
+                angle_triplets=[(0, 1, 2)],
+                nan_policy="drop",
+            )
+
+
+# ---------------------------------------------------------------------------
+# align + representation composition
+# ---------------------------------------------------------------------------
+
+
+class TestAlignWithAngles:
+    def test_procrustes_before_angles_is_no_op_on_invariant_representation(self) -> None:
+        """Procrustes on angle-space DTW should be redundant but safe."""
+        seq = _three_joint_arm()
+        rotated = seq @ _rotation_matrix_z(np.deg2rad(20.0)).T
+        with_align = dtw_all(
+            seq,
+            rotated,
+            align="procrustes_per_sequence",
+            representation="angles",
+            angle_triplets=[(0, 1, 2)],
+        )
+        without_align = dtw_all(
+            seq,
+            rotated,
+            representation="angles",
+            angle_triplets=[(0, 1, 2)],
+        )
+        assert with_align.distance == pytest.approx(without_align.distance, abs=1e-6)

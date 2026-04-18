@@ -239,6 +239,24 @@ be split into per-release sections once tagging begins.
   distance is rotation- and translation-invariant. Paper C's
   pipeline is expected to set `align="procrustes_per_sequence"`;
   see `TECHNICAL.md` Phase 0.
+- **`neuropose.analyzer.dtw.Representation`** and
+  **`neuropose.analyzer.dtw.NanPolicy`** — two new Literal types
+  exposing orthogonal DTW preprocessing knobs on every entry point.
+  `representation` (on `dtw_all` and `dtw_per_joint`) switches the
+  per-frame feature vector between `"coords"` (the 0.1 default) and
+  `"angles"`, which runs `extract_joint_angles` on the supplied
+  `angle_triplets` first — yielding distances that are translation-,
+  rotation-, and scale-invariant by construction, and directly
+  interpretable in clinical terms. `nan_policy` (on all three entry
+  points) selects `"propagate"` (surface fastdtw's ValueError on
+  NaN — the default), `"interpolate"` (linear fill per feature
+  column), or `"drop"` (remove NaN frames before DTW); the
+  policy is applied consistently whether NaN originated from the
+  angles pipeline or from corrupted upstream coordinates.
+  `dtw_relation` stays a standalone convenience entry point for
+  two-joint displacement DTW; users who prefer a unified API can
+  express the same computation via `dtw_all` with an appropriate
+  pair of angle triplets or run `dtw_relation` directly.
 - **`neuropose.analyzer.segment.segment_gait_cycles`** and
   **`segment_gait_cycles_bilateral`** — clinical convenience
   wrappers over `segment_predictions` that pre-fill a `joint_axis`
@@ -313,7 +331,9 @@ be split into per-release sections once tagging begins.
   imports for the heavy dependencies:
   - `analyzer.dtw` — three DTW entry points (`dtw_all`,
     `dtw_per_joint`, `dtw_relation`) over fastdtw, with a frozen
-    `DTWResult` dataclass. See `RESEARCH.md` for the ongoing
+    `DTWResult` dataclass and three orthogonal preprocessing knobs
+    (`align`, `representation`, `nan_policy`). See `RESEARCH.md`
+    for the ongoing
     methodology investigation.
   - `analyzer.features` — `predictions_to_numpy`,
     `normalize_pose_sequence` (uniform and axis-wise),
