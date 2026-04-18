@@ -256,6 +256,28 @@ be split into per-release sections once tagging begins.
   now returns a `LoadedModel` dataclass bundling the TF handle with
   the pinned SHA and filename so the estimator can build the
   `Provenance` without re-hashing the tarball.
+- **`neuropose.reset`** — pipeline-wide reset utility for the
+  benchmark / iteration loop. `find_neuropose_processes()` scans the
+  OS process table (via `psutil`) for running `neuropose watch` and
+  `neuropose serve` instances and classifies each as `daemon` or
+  `monitor`. `terminate_processes()` SIGINTs them, polls for graceful
+  exit up to a configurable grace period, and optionally escalates
+  to SIGKILL with `force_kill=True`. `wipe_state()` removes the
+  contents of `$data_dir/in/`, `$data_dir/out/` (including
+  `status.json`), `$data_dir/failed/` (unless `keep_failed=True`),
+  the `.neuropose.lock` file, and any leftover `.ingest_<uuid>/`
+  staging dirs from interrupted ingests; container directories
+  themselves are preserved so the daemon does not need to recreate
+  them on next startup. `reset_pipeline()` composes the three with
+  one safety guard: if any process survives termination, the wipe
+  phase is skipped and the returned `ResetReport` flags
+  `wipe_skipped_due_to_survivors`, because removing `$data_dir`
+  out from under an active daemon would corrupt its in-flight
+  writes. Surfaced as `neuropose reset` in the CLI with
+  `--yes/-y`, `--keep-failed`, `--force-kill`, `--grace-seconds`,
+  and `--dry-run/-n` flags; the command always prints a preview
+  before prompting (skipped under `--yes`) and returns
+  `EXIT_USAGE=2` when survivors block the wipe.
 - **`neuropose.benchmark`** — multi-pass inference benchmarking for
   a single video. `run_benchmark()` runs `process_video` N times
   (default 5), always discards the first pass as warmup (graph
@@ -304,7 +326,7 @@ be split into per-release sections once tagging begins.
     `slow`) loads the real model and asserts the constant still
     matches, so any upstream skeleton drift fails CI.
 - **`neuropose.cli`** — Typer-based command-line interface with
-  seven subcommands: `watch` (run the daemon), `process <video>`
+  eight subcommands: `watch` (run the daemon), `process <video>`
   (run the estimator on a single video), `ingest <archive>` (unzip
   a video archive into per-video job directories under
   `$data_dir/in/` with validation-before-write and atomic
@@ -315,6 +337,13 @@ be split into per-release sections once tagging begins.
   KeyboardInterrupt exits with the standard shell-interruption
   code and an `OSError` at bind time is translated to a clean
   usage error with the bind target in the message),
+  `reset` (stop the daemon and monitor, then wipe pipeline state
+  for a clean restart — wraps `neuropose.reset` with a confirmation
+  prompt, `--dry-run` preview, `--keep-failed` to preserve the
+  forensic quarantine, `--force-kill` to escalate to SIGKILL after
+  the SIGINT grace period, and `--grace-seconds` to tune the wait;
+  refuses to wipe state while any process survives termination so
+  active writes cannot be corrupted),
   `segment <results>` (post-hoc repetition segmentation — loads a
   JobResults or a single VideoPredictions, runs
   `neuropose.analyzer.segment.segment_predictions` with the chosen

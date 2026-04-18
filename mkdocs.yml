@@ -95,6 +95,7 @@ nav:
       - neuropose.interfacer: api/interfacer.md
       - neuropose.ingest: api/ingest.md
       - neuropose.monitor: api/monitor.md
+      - neuropose.reset: api/reset.md
       - neuropose.io: api/io.md
       - neuropose.migrations: api/migrations.md
       - neuropose.benchmark: api/benchmark.md

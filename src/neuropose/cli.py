@@ -1,6 +1,6 @@
 """NeuroPose command-line interface.
 
-Seven subcommands:
+Eight subcommands:
 
 - ``neuropose watch`` — run the :class:`~neuropose.interfacer.Interfacer`
   daemon against the configured input directory.
@@ -12,6 +12,10 @@ Seven subcommands:
 - ``neuropose serve`` — start the :mod:`~neuropose.monitor` localhost
   HTTP dashboard so collaborators can watch a run's progress in a
   browser or via ``curl``.
+- ``neuropose reset`` — stop the daemon and monitor, then wipe pipeline
+  state (input queue, results, status file, lock file, ingest staging
+  dirs) for a clean restart. See :mod:`neuropose.reset` for the layered
+  implementation.
 - ``neuropose segment <results>`` — post-hoc repetition segmentation of
   an existing predictions file. Attaches a named
   :class:`~neuropose.io.Segmentation` to every video it contains and
@@ -424,6 +428,156 @@ def serve(
         # usage error rather than a raw traceback.
         typer.echo(f"error: could not bind {host}:{port}: {exc}", err=True)
         raise typer.Exit(code=EXIT_USAGE) from exc
+
+
+# ---------------------------------------------------------------------------
+# reset
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def reset(
+    ctx: typer.Context,
+    yes: Annotated[
+        bool,
+        typer.Option(
+            "--yes",
+            "-y",
+            help="Skip the interactive confirmation prompt.",
+        ),
+    ] = False,
+    keep_failed: Annotated[
+        bool,
+        typer.Option(
+            "--keep-failed",
+            help=(
+                "Preserve $data_dir/failed/ for forensic review. By "
+                "default the failed-job quarantine is wiped along with "
+                "in/ and out/."
+            ),
+        ),
+    ] = False,
+    force_kill: Annotated[
+        bool,
+        typer.Option(
+            "--force-kill",
+            help=(
+                "Escalate to SIGKILL on any daemon or monitor still "
+                "alive after the SIGINT grace period. Necessary if the "
+                "daemon is mid-inference on a long video and you do "
+                "not want to wait for the current video to finish."
+            ),
+        ),
+    ] = False,
+    grace_seconds: Annotated[
+        float,
+        typer.Option(
+            "--grace-seconds",
+            min=0.0,
+            help=(
+                "Seconds to wait after SIGINT before declaring a "
+                "process a survivor (or escalating to SIGKILL when "
+                "--force-kill is set)."
+            ),
+        ),
+    ] = 10.0,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            "-n",
+            help="Show what would be killed and removed without doing it.",
+        ),
+    ] = False,
+) -> None:
+    """Stop the daemon and monitor, then wipe pipeline state.
+
+    Discovers running ``neuropose watch`` and ``neuropose serve``
+    processes, sends SIGINT, waits ``--grace-seconds`` for graceful
+    shutdown (optionally escalating to SIGKILL with ``--force-kill``),
+    then removes the contents of ``$data_dir/in/``, ``$data_dir/out/``
+    (including ``status.json``), ``$data_dir/failed/`` (unless
+    ``--keep-failed``), the daemon lock file, and any leftover
+    ``.ingest_<uuid>/`` staging directories from interrupted ingests.
+
+    Refuses to wipe state if any process survives the termination
+    phase — wiping the data directory out from under an active daemon
+    would leave it writing into deleted directory entries. Re-run
+    with ``--force-kill`` or stop the survivor manually.
+    """
+    # Deferred import so reset's psutil scan stays off the watch/process
+    # hot path. psutil is already a runtime dependency for benchmark
+    # metrics, so this import is free at install time.
+    from neuropose.reset import find_neuropose_processes, reset_pipeline, wipe_state
+
+    settings: Settings = ctx.obj
+
+    discovered = find_neuropose_processes()
+    preview = wipe_state(settings, keep_failed=keep_failed, dry_run=True)
+
+    typer.echo(f"data dir:       {settings.data_dir}")
+    if discovered:
+        typer.echo(f"would stop:     {len(discovered)} process(es)")
+        for rp in discovered:
+            typer.echo(f"  pid {rp.pid:>7}  {rp.role:<7}  {rp.cmdline}")
+    else:
+        typer.echo("would stop:     no daemon or monitor running")
+    if preview.removed_paths:
+        size_mb = preview.bytes_freed / (1024 * 1024)
+        typer.echo(
+            f"would remove:   {len(preview.removed_paths)} path(s) ({size_mb:.1f} MB)"
+        )
+        for path in preview.removed_paths:
+            typer.echo(f"  {path}")
+    else:
+        typer.echo("would remove:   nothing — data dir is already clean")
+
+    if dry_run:
+        typer.echo("(dry-run; no changes made)")
+        return
+
+    if not discovered and not preview.removed_paths:
+        typer.echo("nothing to do.")
+        return
+
+    if not yes and not typer.confirm("\nproceed?"):
+        typer.echo("aborted.")
+        raise typer.Exit(code=EXIT_USAGE)
+
+    report = reset_pipeline(
+        settings,
+        grace_seconds=grace_seconds,
+        force_kill=force_kill,
+        keep_failed=keep_failed,
+    )
+
+    if report.termination.stopped:
+        typer.echo(f"stopped {len(report.termination.stopped)} process(es) via SIGINT")
+    if report.termination.force_killed:
+        typer.echo(
+            f"force-killed {len(report.termination.force_killed)} process(es) "
+            f"after {grace_seconds:.0f}s grace period"
+        )
+    if report.termination.survivors:
+        typer.echo(
+            f"error: {len(report.termination.survivors)} process(es) did not exit:",
+            err=True,
+        )
+        for rp in report.termination.survivors:
+            typer.echo(f"  pid {rp.pid} ({rp.role})", err=True)
+        if report.wipe_skipped_due_to_survivors:
+            typer.echo(
+                "  state on disk was NOT wiped — re-run with --force-kill, "
+                "or stop these processes manually first.",
+                err=True,
+            )
+        raise typer.Exit(code=EXIT_USAGE)
+
+    size_mb = report.wipe.bytes_freed / (1024 * 1024)
+    typer.echo(
+        f"removed {len(report.wipe.removed_paths)} path(s) "
+        f"({size_mb:.1f} MB freed)"
+    )
 
 
 # ---------------------------------------------------------------------------
