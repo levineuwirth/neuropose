@@ -683,9 +683,15 @@ def stub_estimator_with_metrics(monkeypatch: pytest.MonkeyPatch):
                 "poses2d": np.array([[[0.0, 0.0], [1.0, 1.0]]]),
             }
 
-    def fake_loader(cache_dir: Path | None = None) -> object:
+    from neuropose._model import LoadedModel
+
+    def fake_loader(cache_dir: Path | None = None) -> LoadedModel:
         del cache_dir
-        return RecordingFake()
+        return LoadedModel(
+            model=RecordingFake(),
+            sha256="smoke_sha",
+            filename="metrabs_smoke.tar.gz",
+        )
 
     monkeypatch.setattr("neuropose.estimator.load_metrabs_model", fake_loader)
 

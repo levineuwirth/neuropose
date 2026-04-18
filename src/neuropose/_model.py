@@ -41,10 +41,32 @@ import os
 import shutil
 import tarfile
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class LoadedModel:
+    """Result of :func:`load_metrabs_model`.
+
+    Bundles the loaded TensorFlow model with the provenance metadata
+    that identifies which artifact it came from. Callers that only want
+    the model reach for :attr:`model`; callers that build a
+    :class:`~neuropose.io.Provenance` (primarily
+    :class:`~neuropose.estimator.Estimator`) pull :attr:`sha256` and
+    :attr:`filename` too.
+
+    Frozen — once :func:`load_metrabs_model` has produced a
+    ``LoadedModel``, nothing downstream should edit the identity of
+    the artifact it describes.
+    """
+
+    model: Any
+    sha256: str
+    filename: str
 
 # ---------------------------------------------------------------------------
 # Model artifact: pinned URL and checksum.
@@ -74,7 +96,7 @@ _REQUIRED_MODEL_ATTRS = (
 # ---------------------------------------------------------------------------
 
 
-def load_metrabs_model(cache_dir: Path | None = None) -> Any:
+def load_metrabs_model(cache_dir: Path | None = None) -> LoadedModel:
     """Load the MeTRAbs model, downloading and caching on first use.
 
     Parameters
@@ -87,9 +109,11 @@ def load_metrabs_model(cache_dir: Path | None = None) -> Any:
 
     Returns
     -------
-    object
-        A TensorFlow SavedModel handle exposing ``detect_poses`` and
-        the ``per_skeleton_joint_names`` / ``per_skeleton_joint_edges``
+    LoadedModel
+        Bundle containing the TensorFlow SavedModel handle alongside
+        the pinned artifact SHA-256 and filename that identify which
+        model the handle came from. The handle exposes ``detect_poses``
+        and the ``per_skeleton_joint_names`` / ``per_skeleton_joint_edges``
         attributes used by :class:`neuropose.estimator.Estimator`.
 
     Raises
@@ -99,6 +123,18 @@ def load_metrabs_model(cache_dir: Path | None = None) -> Any:
         automatic retry), extraction fails, TensorFlow is not
         installed, or the loaded model does not expose the expected
         interface.
+
+    Notes
+    -----
+    The returned ``sha256`` is the module-pinned :data:`_MODEL_SHA256`,
+    not a re-hash of the on-disk tarball. On the cold-cache path this
+    is exactly the hash we verified against before loading. On the
+    warm-cache path the tarball is not re-verified (that would cost a
+    2 GB I/O pass on every daemon startup), so the reported SHA is an
+    attestation of "this is the pinned artifact NeuroPose loads" rather
+    than a direct fingerprint of the on-disk bytes. For the threat
+    model this supports — reproducibility, not tamper-evidence — that
+    is the correct semantics.
     """
     resolved_cache = Path(cache_dir) if cache_dir is not None else _default_cache_dir()
     resolved_cache.mkdir(parents=True, exist_ok=True)
@@ -115,7 +151,11 @@ def load_metrabs_model(cache_dir: Path | None = None) -> Any:
             )
             shutil.rmtree(model_dir, ignore_errors=True)
         else:
-            return _tf_load(saved_model_dir)
+            return LoadedModel(
+                model=_tf_load(saved_model_dir),
+                sha256=_MODEL_SHA256,
+                filename=_MODEL_ARCHIVE_NAME,
+            )
 
     tarball = resolved_cache / _MODEL_ARCHIVE_NAME
 
@@ -135,7 +175,11 @@ def load_metrabs_model(cache_dir: Path | None = None) -> Any:
 
     _extract_tarball(tarball, model_dir)
     saved_model_dir = _find_saved_model(model_dir)
-    return _tf_load(saved_model_dir)
+    return LoadedModel(
+        model=_tf_load(saved_model_dir),
+        sha256=_MODEL_SHA256,
+        filename=_MODEL_ARCHIVE_NAME,
+    )
 
 
 # ---------------------------------------------------------------------------

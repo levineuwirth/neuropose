@@ -34,19 +34,25 @@ model is present raises :class:`ModelNotLoadedError`.
 from __future__ import annotations
 
 import logging
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from typing import Any
 
 import cv2
+import numpy as np
 import psutil
 
+from neuropose import __version__ as _neuropose_version
 from neuropose._model import load_metrabs_model
 from neuropose.io import (
     FramePrediction,
     PerformanceMetrics,
+    Provenance,
     VideoMetadata,
     VideoPredictions,
 )
@@ -158,6 +164,12 @@ class Estimator:
         # successful ``load_model`` below so the next ``process_video`` can
         # pass the real number through into ``PerformanceMetrics``.
         self._model_load_seconds: float | None = None
+        # MeTRAbs artifact identity, set only by ``load_model``. When the
+        # model was injected via the constructor we have no way to
+        # fingerprint it, so these remain ``None`` and ``process_video``
+        # leaves the output's ``provenance`` as ``None`` too.
+        self._model_sha256: str | None = None
+        self._model_filename: str | None = None
 
     # -- model lifecycle ----------------------------------------------------
 
@@ -175,6 +187,21 @@ class Estimator:
     def is_model_loaded(self) -> bool:
         """Return ``True`` if a model has been supplied or loaded."""
         return self._model is not None
+
+    @property
+    def model_sha256(self) -> str | None:
+        """Return the SHA-256 of the loaded MeTRAbs artifact, or ``None``.
+
+        ``None`` when the model was injected via ``Estimator(model=...)``
+        rather than loaded via :meth:`load_model`. The value, when
+        present, is the module-pinned SHA from :mod:`neuropose._model`.
+        """
+        return self._model_sha256
+
+    @property
+    def model_filename(self) -> str | None:
+        """Return the basename of the MeTRAbs artifact, or ``None`` if injected."""
+        return self._model_filename
 
     def load_model(self, cache_dir: Path | None = None) -> None:
         """Load the MeTRAbs model via :func:`neuropose._model.load_metrabs_model`.
@@ -196,9 +223,16 @@ class Estimator:
             return
         logger.info("Loading MeTRAbs model (cache_dir=%s)", cache_dir)
         start = time.perf_counter()
-        self._model = load_metrabs_model(cache_dir=cache_dir)
+        loaded = load_metrabs_model(cache_dir=cache_dir)
         self._model_load_seconds = time.perf_counter() - start
-        logger.info("MeTRAbs model loaded in %.2f s", self._model_load_seconds)
+        self._model = loaded.model
+        self._model_sha256 = loaded.sha256
+        self._model_filename = loaded.filename
+        logger.info(
+            "MeTRAbs model loaded in %.2f s (sha256=%s)",
+            self._model_load_seconds,
+            loaded.sha256[:12],
+        )
 
     # -- inference ----------------------------------------------------------
 
@@ -330,10 +364,52 @@ class Estimator:
             metrics.active_device,
         )
 
-        predictions = VideoPredictions(metadata=metadata, frames=frames)
+        provenance = self._build_provenance(device_info=device_info)
+        predictions = VideoPredictions(
+            metadata=metadata,
+            frames=frames,
+            provenance=provenance,
+        )
         return ProcessVideoResult(predictions=predictions, metrics=metrics)
 
     # -- internals ----------------------------------------------------------
+
+    def _build_provenance(self, *, device_info: _ActiveDeviceInfo) -> Provenance | None:
+        """Construct a :class:`~neuropose.io.Provenance` for the current run.
+
+        Returns ``None`` when the model was injected via the constructor
+        rather than loaded via :meth:`load_model` — in that case we
+        cannot fingerprint the artifact, and a partial provenance would
+        mislead readers into thinking we could.
+
+        The device-info bundle is shared with the :class:`PerformanceMetrics`
+        construction (one call to :func:`_detect_active_device` per
+        ``process_video`` invocation) so that both artifacts see
+        identical TF and Metal state.
+        """
+        if self._model_sha256 is None or self._model_filename is None:
+            return None
+
+        metal_version: str | None = None
+        if device_info.metal_active:
+            try:
+                metal_version = _pkg_version("tensorflow-metal")
+            except PackageNotFoundError:
+                metal_version = None
+
+        python_version = (
+            f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+        )
+
+        return Provenance(
+            model_sha256=self._model_sha256,
+            model_filename=self._model_filename,
+            tensorflow_version=device_info.tf_version,
+            tensorflow_metal_version=metal_version,
+            numpy_version=np.__version__,
+            neuropose_version=_neuropose_version,
+            python_version=python_version,
+        )
 
     def _infer_frame(
         self,

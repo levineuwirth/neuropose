@@ -10,6 +10,14 @@ Atomicity: :func:`save_status`, :func:`save_job_results`, and
 atomically rename, so a crash mid-write will not leave a partially-written
 file behind. This matches the crash-resilience guarantee the interfacer
 daemon makes to callers.
+
+Schema versioning: :class:`VideoPredictions` and :class:`BenchmarkResult`
+each carry a ``schema_version`` integer. On load, the raw JSON dict is
+passed through :mod:`neuropose.migrations` before pydantic validation so
+that files written by earlier versions upgrade transparently. :class:`JobResults`
+is a ``RootModel`` with no envelope of its own, so its loader runs the
+per-video migration on each entry of its mapping. See
+:mod:`neuropose.migrations` for the migration-registration pattern.
 """
 
 from __future__ import annotations
@@ -22,6 +30,13 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
+
+from neuropose.migrations import (
+    CURRENT_VERSION,
+    migrate_benchmark_result,
+    migrate_job_results,
+    migrate_video_predictions,
+)
 
 
 class JobStatus(StrEnum):
@@ -157,6 +172,104 @@ class PerformanceMetrics(BaseModel):
     )
 
 
+class Provenance(BaseModel):
+    """Reproducibility-grade record of the environment that produced a payload.
+
+    Populated by the estimator on every inference run when the MeTRAbs
+    model was loaded through
+    :meth:`neuropose.estimator.Estimator.load_model` (the production
+    path). ``None`` when the model was injected directly via the
+    ``Estimator(model=...)`` constructor (the test-fixture path), since
+    NeuroPose has no way to fingerprint a model it did not load itself.
+
+    Paper C's reproducibility story rests on this envelope: two runs
+    that produced equal ``Provenance`` objects against the same input
+    are expected to produce equal output (modulo non-determinism
+    controlled by ``deterministic``). Reviewers who want to re-derive a
+    figure from raw video need exactly these fields.
+
+    Frozen so a captured ``Provenance`` cannot be mutated after it has
+    been attached to a result; this matches the invariant that
+    provenance is a property of the run, not of the reader.
+
+    ``protected_namespaces=()`` silences pydantic's ``model_*`` field
+    warning — the ``model_sha256`` / ``model_filename`` names refer to
+    the MeTRAbs model artifact, not to pydantic's internal
+    ``model_validate`` / ``model_dump`` namespace, so the collision is
+    cosmetic.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, protected_namespaces=())
+
+    model_sha256: str = Field(
+        description=(
+            "SHA-256 of the MeTRAbs model tarball (hex-encoded, lowercase). "
+            "Pinned at build time in :mod:`neuropose._model` and verified on "
+            "first download. Identifies the exact model weights used."
+        ),
+    )
+    model_filename: str = Field(
+        description=(
+            "Canonical basename of the MeTRAbs tarball, e.g. "
+            "``metrabs_eff2l_y4_384px_800k_28ds.tar.gz``. Human-readable "
+            "companion to ``model_sha256``."
+        ),
+    )
+    tensorflow_version: str = Field(
+        description="Value of ``tensorflow.__version__`` at the time of the run.",
+    )
+    tensorflow_metal_version: str | None = Field(
+        default=None,
+        description=(
+            "Version of the ``tensorflow-metal`` PyPI package when installed; "
+            "``None`` on platforms without Metal GPU acceleration."
+        ),
+    )
+    numpy_version: str = Field(
+        description="Value of ``numpy.__version__`` at the time of the run.",
+    )
+    neuropose_version: str = Field(
+        description="Value of ``neuropose.__version__`` at the time of the run.",
+    )
+    python_version: str = Field(
+        description=(
+            "Python version as ``MAJOR.MINOR.MICRO``, e.g. ``3.11.14``. The "
+            "full ``sys.version`` string is intentionally not captured; the "
+            "three-component form is stable across patch builds and avoids "
+            "embedding compiler and build-date metadata."
+        ),
+    )
+    seed: int | None = Field(
+        default=None,
+        description=(
+            "Random seed used for the run if one was set, else ``None``. "
+            "MeTRAbs inference is deterministic on a given device up to "
+            "floating-point associativity, so seeding mostly matters for "
+            "downstream analysis that introduces randomness (bootstraps, "
+            "learned metrics)."
+        ),
+    )
+    deterministic: bool = Field(
+        default=False,
+        description=(
+            "``True`` if ``tf.config.experimental.enable_op_determinism()`` "
+            "was active during the run. Track 2 deterministic-inference "
+            "mode; the field exists in Phase 0 so payloads can record "
+            "whether the run *was* deterministic without requiring a "
+            "schema change when the toggle lands."
+        ),
+    )
+    analysis_config: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Parsed YAML dict if this payload was produced by ``neuropose "
+            "analyze --config <file>``. ``None`` for direct-library or "
+            "``neuropose watch`` invocations. Reserved for the Phase 0 "
+            "YAML-configurable analysis pipeline."
+        ),
+    )
+
+
 class BenchmarkAggregate(BaseModel):
     """Distributional statistics aggregated across benchmark passes.
 
@@ -255,6 +368,16 @@ class BenchmarkResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    schema_version: int = Field(
+        default=CURRENT_VERSION,
+        ge=1,
+        description=(
+            "Schema version of this BenchmarkResult payload. Fresh writes "
+            "stamp :data:`neuropose.migrations.CURRENT_VERSION`; older files "
+            "are migrated on load via :mod:`neuropose.migrations` before "
+            "pydantic validation."
+        ),
+    )
     video_name: str = Field(
         description="Basename of the benchmarked video (no directory components).",
     )
@@ -280,6 +403,14 @@ class BenchmarkResult(BaseModel):
     )
     aggregate: BenchmarkAggregate
     cpu_comparison: CpuComparisonResult | None = None
+    provenance: Provenance | None = Field(
+        default=None,
+        description=(
+            "Reproducibility envelope from the benchmark run. ``None`` on "
+            "tests where the model was injected directly via "
+            "``Estimator(model=...)``."
+        ),
+    )
 
 
 class JointAxisExtractor(BaseModel):
@@ -469,9 +600,30 @@ class VideoPredictions(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    schema_version: int = Field(
+        default=CURRENT_VERSION,
+        ge=1,
+        description=(
+            "Schema version of this VideoPredictions payload. Fresh writes "
+            "stamp :data:`neuropose.migrations.CURRENT_VERSION`; files written "
+            "by older NeuroPose versions are migrated to the current version "
+            "by :mod:`neuropose.migrations` before pydantic validation."
+        ),
+    )
     metadata: VideoMetadata
     frames: dict[str, FramePrediction]
     segmentations: dict[str, Segmentation] = Field(default_factory=dict)
+    provenance: Provenance | None = Field(
+        default=None,
+        description=(
+            "Reproducibility envelope populated by the estimator on runs "
+            "where the MeTRAbs model was loaded via "
+            ":meth:`neuropose.estimator.Estimator.load_model`. ``None`` on "
+            "test paths where the model was injected via "
+            "``Estimator(model=...)``, because no model SHA is known in "
+            "that case."
+        ),
+    )
 
     def frame_names(self) -> list[str]:
         """Return frame identifiers in insertion order."""
@@ -623,9 +775,16 @@ class StatusFile(RootModel[dict[str, JobStatusEntry]]):
 
 
 def load_video_predictions(path: Path) -> VideoPredictions:
-    """Load and validate a per-video predictions JSON file."""
+    """Load and validate a per-video predictions JSON file.
+
+    Runs the payload through :func:`neuropose.migrations.migrate_video_predictions`
+    before pydantic validation so files written by older NeuroPose versions
+    upgrade to the current schema transparently.
+    """
     with path.open("r", encoding="utf-8") as f:
         data: Any = json.load(f)
+    if isinstance(data, dict):
+        data = migrate_video_predictions(data)
     return VideoPredictions.model_validate(data)
 
 
@@ -636,9 +795,17 @@ def save_video_predictions(path: Path, predictions: VideoPredictions) -> None:
 
 
 def load_job_results(path: Path) -> JobResults:
-    """Load and validate an aggregated per-job results JSON file."""
+    """Load and validate an aggregated per-job results JSON file.
+
+    Runs each video's payload through
+    :func:`neuropose.migrations.migrate_video_predictions` before pydantic
+    validation. :class:`JobResults` is a ``RootModel`` with no envelope of
+    its own, so migration happens per-entry rather than at the top level.
+    """
     with path.open("r", encoding="utf-8") as f:
         data: Any = json.load(f)
+    if isinstance(data, dict):
+        data = migrate_job_results(data)
     return JobResults.model_validate(data)
 
 
@@ -649,9 +816,16 @@ def save_job_results(path: Path, results: JobResults) -> None:
 
 
 def load_benchmark_result(path: Path) -> BenchmarkResult:
-    """Load and validate a benchmark-result JSON file."""
+    """Load and validate a benchmark-result JSON file.
+
+    Runs the payload through :func:`neuropose.migrations.migrate_benchmark_result`
+    before pydantic validation so files written by older NeuroPose versions
+    upgrade transparently.
+    """
     with path.open("r", encoding="utf-8") as f:
         data: Any = json.load(f)
+    if isinstance(data, dict):
+        data = migrate_benchmark_result(data)
     return BenchmarkResult.model_validate(data)
 
 

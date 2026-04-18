@@ -50,8 +50,8 @@ def test_joint_names_match_pinned_model(metrabs_model_cache_dir: Path) -> None:
        commit that bumps the model pin in :mod:`neuropose._model`.
     2. Cross-check any CLI or docs that embed hardcoded joint names.
     """
-    model = load_metrabs_model(cache_dir=metrabs_model_cache_dir)
-    tensor = model.per_skeleton_joint_names["berkeley_mhad_43"]
+    loaded = load_metrabs_model(cache_dir=metrabs_model_cache_dir)
+    tensor = loaded.model.per_skeleton_joint_names["berkeley_mhad_43"]
     model_names = tuple(tensor.numpy().astype(str).tolist())
     assert model_names == JOINT_NAMES, (
         "JOINT_NAMES drift detected — the hardcoded tuple in "

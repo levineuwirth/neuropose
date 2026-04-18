@@ -222,6 +222,23 @@ be split into per-release sections once tagging begins.
   at `CURRENT_VERSION = 2`, with registered v1 → v2 migrations for
   `VideoPredictions` and `BenchmarkResult` that add the optional
   `provenance` field.
+- **`neuropose.io.Provenance`** — reproducibility envelope for every
+  inference run. Populated automatically by `Estimator.process_video`
+  when the model was loaded via `load_model` (the production path)
+  and attached to the output `VideoPredictions`; propagates from
+  there into `JobResults` (per-video) and `BenchmarkResult` (via the
+  benchmark loop). Captures the MeTRAbs artifact SHA-256 and
+  filename, `tensorflow` / `tensorflow-metal` / `numpy` /
+  `neuropose` / Python versions, and reserved slots for a `seed`,
+  `deterministic` flag (Track 2), and `analysis_config` (Phase 0
+  YAML pipeline). `None` on the injected-model test path where
+  NeuroPose has no way to fingerprint the supplied artifact. Frozen
+  pydantic model with `extra="forbid"` and
+  `protected_namespaces=()` so the `model_*` field names do not
+  collide with pydantic v2's internal namespace. `_model.load_metrabs_model`
+  now returns a `LoadedModel` dataclass bundling the TF handle with
+  the pinned SHA and filename so the estimator can build the
+  `Provenance` without re-hashing the tarball.
 - **`neuropose.benchmark`** — multi-pass inference benchmarking for
   a single video. `run_benchmark()` runs `process_video` N times
   (default 5), always discards the first pass as warmup (graph

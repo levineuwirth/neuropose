@@ -70,17 +70,21 @@ class TestModelGuard:
         network: the loader is monkeypatched to return a sentinel, and we
         assert it ends up as the estimator's model.
         """
+        from neuropose._model import LoadedModel
+
         sentinel = object()
         called_with: list[Path | None] = []
 
-        def fake_loader(cache_dir: Path | None = None) -> object:
+        def fake_loader(cache_dir: Path | None = None) -> LoadedModel:
             called_with.append(cache_dir)
-            return sentinel
+            return LoadedModel(model=sentinel, sha256="deadbeef", filename="fake.tar.gz")
 
         monkeypatch.setattr("neuropose.estimator.load_metrabs_model", fake_loader)
         estimator = Estimator()
         estimator.load_model(cache_dir=Path("/tmp/fake-cache"))
         assert estimator.model is sentinel
+        assert estimator.model_sha256 == "deadbeef"
+        assert estimator.model_filename == "fake.tar.gz"
         assert called_with == [Path("/tmp/fake-cache")]
 
     def test_load_model_is_idempotent_when_already_loaded(
@@ -278,9 +282,15 @@ class TestPerformanceMetrics:
                     "poses2d": np.array([[[0.0, 0.0]]]),
                 }
 
-        def fake_loader(cache_dir: Path | None = None) -> object:
+        from neuropose._model import LoadedModel
+
+        def fake_loader(cache_dir: Path | None = None) -> LoadedModel:
             del cache_dir
-            return Recorder()
+            return LoadedModel(
+                model=Recorder(),
+                sha256="fake_sha",
+                filename="metrabs_fake.tar.gz",
+            )
 
         monkeypatch.setattr("neuropose.estimator.load_metrabs_model", fake_loader)
         estimator = Estimator()
@@ -310,6 +320,88 @@ class TestPerformanceMetrics:
         # TF is in the dev deps so the version should always be a real
         # string, not the "unknown" fallback.
         assert result.metrics.tensorflow_version not in {"", "unknown"}
+
+
+class TestProvenance:
+    """Provenance attachment to VideoPredictions.
+
+    Covers the two relevant paths: the injected-model path (no SHA
+    known → ``provenance=None`` on output) and the ``load_model`` path
+    (SHA is known → full ``Provenance`` populated and attached).
+    """
+
+    def test_injected_model_produces_no_provenance(
+        self,
+        synthetic_video: Path,
+        fake_metrabs_model,
+    ) -> None:
+        estimator = Estimator(model=fake_metrabs_model)
+        result = estimator.process_video(synthetic_video)
+        assert result.predictions.provenance is None
+        assert estimator.model_sha256 is None
+        assert estimator.model_filename is None
+
+    def test_loaded_model_populates_provenance(
+        self,
+        synthetic_video: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import numpy as np
+
+        from neuropose._model import LoadedModel
+
+        class Recorder:
+            def detect_poses(self, image, **kwargs):
+                del image, kwargs
+                return {
+                    "boxes": np.array([[0.0, 0.0, 1.0, 1.0, 0.9]]),
+                    "poses3d": np.array([[[0.0, 0.0, 0.0]]]),
+                    "poses2d": np.array([[[0.0, 0.0]]]),
+                }
+
+        def fake_loader(cache_dir: Path | None = None) -> LoadedModel:
+            del cache_dir
+            return LoadedModel(
+                model=Recorder(),
+                sha256="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                filename="metrabs_stub.tar.gz",
+            )
+
+        monkeypatch.setattr("neuropose.estimator.load_metrabs_model", fake_loader)
+        estimator = Estimator()
+        estimator.load_model()
+        result = estimator.process_video(synthetic_video)
+
+        prov = result.predictions.provenance
+        assert prov is not None
+        assert prov.model_sha256.startswith("e3b0c44")
+        assert prov.model_filename == "metrabs_stub.tar.gz"
+        assert prov.numpy_version == np.__version__
+        assert prov.python_version.count(".") == 2  # MAJOR.MINOR.MICRO
+        # neuropose_version should match the package's __version__
+        from neuropose import __version__ as pkg_version
+
+        assert prov.neuropose_version == pkg_version
+        # tensorflow_version should also be real (TF is in dev deps).
+        assert prov.tensorflow_version not in {"", "unknown"}
+
+    def test_model_sha256_and_filename_properties_after_load(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from neuropose._model import LoadedModel
+
+        def fake_loader(cache_dir: Path | None = None) -> LoadedModel:
+            del cache_dir
+            return LoadedModel(model=object(), sha256="abcd", filename="x.tar.gz")
+
+        monkeypatch.setattr("neuropose.estimator.load_metrabs_model", fake_loader)
+        estimator = Estimator()
+        assert estimator.model_sha256 is None
+        assert estimator.model_filename is None
+        estimator.load_model()
+        assert estimator.model_sha256 == "abcd"
+        assert estimator.model_filename == "x.tar.gz"
 
 
 class TestErrors:

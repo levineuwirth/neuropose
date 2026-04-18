@@ -105,9 +105,17 @@ def run_benchmark(
 
     passes: list[PerformanceMetrics] = []
     reference_predictions: VideoPredictions | None = None
+    # Provenance is identical across every pass of a single run (same
+    # estimator, same model, same environment), so we keep just the
+    # latest one we see. Doing this on every iteration is cheap — it's
+    # one attribute read — and means the benchmark result carries
+    # provenance even when ``capture_reference`` is off.
+    latest_provenance = None
     for i in range(repeats):
         result = estimator.process_video(video_path)
         passes.append(result.metrics)
+        if result.predictions.provenance is not None:
+            latest_provenance = result.predictions.provenance
         # Only the *last* measured pass needs to be captured for
         # divergence comparison. Earlier passes would just be
         # overwritten, so we avoid holding their frame dicts in memory.
@@ -122,6 +130,7 @@ def run_benchmark(
         warmup_pass=passes[0],
         measured_passes=passes[1:],
         aggregate=aggregate,
+        provenance=latest_provenance,
     )
     return BenchmarkRunOutcome(
         result=benchmark_result,

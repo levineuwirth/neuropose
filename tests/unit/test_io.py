@@ -22,6 +22,7 @@ from neuropose.io import (
     JointPairDistanceExtractor,
     JointSpeedExtractor,
     PerformanceMetrics,
+    Provenance,
     Segment,
     Segmentation,
     SegmentationConfig,
@@ -276,6 +277,102 @@ class TestPerformanceMetricsModel:
         m = _make_metrics()
         with pytest.raises(ValidationError):
             m.total_seconds = 2.0
+
+
+def _minimal_provenance() -> Provenance:
+    return Provenance(
+        model_sha256="a" * 64,
+        model_filename="metrabs_fake.tar.gz",
+        tensorflow_version="2.18.1",
+        numpy_version="2.0.2",
+        neuropose_version="0.1.0.dev0",
+        python_version="3.11.14",
+    )
+
+
+class TestProvenanceModel:
+    """Schema-level behaviour of :class:`neuropose.io.Provenance`."""
+
+    def test_roundtrip_through_json(self) -> None:
+        p = Provenance(
+            model_sha256="a" * 64,
+            model_filename="metrabs_fake.tar.gz",
+            tensorflow_version="2.18.1",
+            tensorflow_metal_version="1.2.0",
+            numpy_version="2.0.2",
+            neuropose_version="0.1.0.dev0",
+            python_version="3.11.14",
+            seed=42,
+            deterministic=True,
+            analysis_config={"step": "dtw", "nan_policy": "propagate"},
+        )
+        rehydrated = Provenance.model_validate(p.model_dump(mode="json"))
+        assert rehydrated == p
+
+    def test_optional_fields_default_to_none_and_false(self) -> None:
+        p = _minimal_provenance()
+        assert p.tensorflow_metal_version is None
+        assert p.seed is None
+        assert p.deterministic is False
+        assert p.analysis_config is None
+
+    def test_is_frozen(self) -> None:
+        p = _minimal_provenance()
+        with pytest.raises(ValidationError):
+            p.model_sha256 = "different"
+
+    def test_extra_fields_forbidden(self) -> None:
+        # Construct via model_validate so pyright doesn't have to prove the
+        # keyword doesn't exist on the class at static-type time.
+        with pytest.raises(ValidationError):
+            Provenance.model_validate(
+                {
+                    "model_sha256": "x" * 64,
+                    "model_filename": "x.tar.gz",
+                    "tensorflow_version": "2.18",
+                    "numpy_version": "2.0",
+                    "neuropose_version": "0.1",
+                    "python_version": "3.11.14",
+                    "unknown_field": "bogus",
+                }
+            )
+
+
+class TestVideoPredictionsProvenance:
+    """``provenance`` field on :class:`VideoPredictions` round-trips."""
+
+    def test_default_is_none(self) -> None:
+        vp = VideoPredictions(
+            metadata=VideoMetadata(frame_count=0, fps=30.0, width=32, height=32),
+            frames={},
+        )
+        assert vp.provenance is None
+
+    def test_roundtrip_with_provenance(self, tmp_path: Path) -> None:
+        prov = Provenance(
+            model_sha256="f" * 64,
+            model_filename="metrabs.tar.gz",
+            tensorflow_version="2.18.1",
+            numpy_version="2.0.2",
+            neuropose_version="0.1.0.dev0",
+            python_version="3.11.14",
+        )
+        vp = VideoPredictions(
+            metadata=VideoMetadata(frame_count=1, fps=30.0, width=32, height=32),
+            frames={
+                "frame_000000": FramePrediction(
+                    boxes=[[0.0, 0.0, 32.0, 32.0, 0.9]],
+                    poses3d=[[[1.0, 2.0, 3.0]]],
+                    poses2d=[[[10.0, 20.0]]],
+                )
+            },
+            provenance=prov,
+        )
+        path = tmp_path / "vp.json"
+        save_video_predictions(path, vp)
+        loaded = load_video_predictions(path)
+        assert loaded == vp
+        assert loaded.provenance == prov
 
 
 class TestBenchmarkResultPersistence:

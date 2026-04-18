@@ -81,26 +81,29 @@ class TestMetrabsLoader:
     """Exercises the loader's download → verify → extract → load path."""
 
     def test_download_and_load(self, shared_model_cache_dir: Path) -> None:
-        model = load_metrabs_model(cache_dir=shared_model_cache_dir)
-        assert model is not None
+        loaded = load_metrabs_model(cache_dir=shared_model_cache_dir)
+        assert loaded.model is not None
+        assert loaded.sha256
+        assert loaded.filename
         for attr in ("detect_poses", "per_skeleton_joint_names", "per_skeleton_joint_edges"):
-            assert hasattr(model, attr), f"loaded model is missing {attr}"
+            assert hasattr(loaded.model, attr), f"loaded model is missing {attr}"
 
     def test_second_call_uses_cache(self, shared_model_cache_dir: Path) -> None:
         """Idempotent: second call should return the cached model cheaply."""
-        model_a = load_metrabs_model(cache_dir=shared_model_cache_dir)
-        model_b = load_metrabs_model(cache_dir=shared_model_cache_dir)
+        loaded_a = load_metrabs_model(cache_dir=shared_model_cache_dir)
+        loaded_b = load_metrabs_model(cache_dir=shared_model_cache_dir)
         # tf.saved_model.load returns a new Python object each call, so
         # identity comparison doesn't work — but both should still
-        # expose the MeTRAbs interface.
-        assert hasattr(model_a, "detect_poses")
-        assert hasattr(model_b, "detect_poses")
+        # expose the MeTRAbs interface, and the SHA should match.
+        assert hasattr(loaded_a.model, "detect_poses")
+        assert hasattr(loaded_b.model, "detect_poses")
+        assert loaded_a.sha256 == loaded_b.sha256
 
     def test_berkeley_mhad_skeleton_is_present(self, shared_model_cache_dir: Path) -> None:
         """The estimator pins skeleton='berkeley_mhad_43'; verify it exists."""
-        model = load_metrabs_model(cache_dir=shared_model_cache_dir)
-        joint_names = model.per_skeleton_joint_names["berkeley_mhad_43"]
-        joint_edges = model.per_skeleton_joint_edges["berkeley_mhad_43"]
+        loaded = load_metrabs_model(cache_dir=shared_model_cache_dir)
+        joint_names = loaded.model.per_skeleton_joint_names["berkeley_mhad_43"]
+        joint_edges = loaded.model.per_skeleton_joint_edges["berkeley_mhad_43"]
         # MeTRAbs exposes these as tf.Tensor objects; just verify we
         # can pull a shape out.
         assert joint_names.shape[0] == 43
