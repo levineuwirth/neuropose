@@ -202,6 +202,26 @@ be split into per-release sections once tagging begins.
   (with a `.collisions` list of offending names). The running
   daemon needs no changes — ingested job dirs are picked up on the
   next poll.
+- **`neuropose.migrations`** — schema-migration infrastructure for
+  the three top-level serialised payloads (`VideoPredictions`,
+  `JobResults`, `BenchmarkResult`). Every payload carries a
+  `schema_version` field defaulting to `CURRENT_VERSION`; on load,
+  the raw JSON dict is passed through `migrate_video_predictions` /
+  `migrate_job_results` / `migrate_benchmark_result` *before*
+  pydantic validation so files written by older NeuroPose versions
+  upgrade transparently. One shared `CURRENT_VERSION` counter;
+  per-schema migration registries populated via
+  `register_video_predictions_migration(from_version)` and
+  `register_benchmark_result_migration(from_version)` decorators.
+  `JobResults` is a `RootModel` with no envelope of its own, so its
+  migration runs per-entry across the root mapping. The driver raises
+  `FutureSchemaError` for payloads newer than the current build
+  (clear upgrade-NeuroPose message), `MigrationNotFoundError` for
+  missing chain links (indicates a `CURRENT_VERSION` bump that forgot
+  its migration), and logs at INFO on each version advance. Currently
+  at `CURRENT_VERSION = 2`, with registered v1 → v2 migrations for
+  `VideoPredictions` and `BenchmarkResult` that add the optional
+  `provenance` field.
 - **`neuropose.benchmark`** — multi-pass inference benchmarking for
   a single video. `run_benchmark()` runs `process_video` N times
   (default 5), always discards the first pass as warmup (graph
