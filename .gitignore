@@ -37,6 +37,7 @@ env.bak/
 venv.bak/
 
 # --- Caches and type-checker artifacts -------------------------------------
+.claude/
 .cache/
 .mypy_cache/
 .pyright/
