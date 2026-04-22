@@ -292,8 +292,16 @@ be split into per-release sections once tagging begins.
   `"left_heel_strikes[i]"` / `"right_heel_strikes[i]"` labels.
   `load_config(path)` parses YAML, `save_report(path, report)`
   writes atomically, and `load_report(path)` rehydrates via the
-  migration chain. CLI wiring and example configs land in
-  follow-up commits.
+  migration chain. Wired to the CLI as `neuropose analyze --config
+  <yaml> [--output <json>]` — replaces the placeholder stub that
+  previously returned `EXIT_PENDING`. The CLI surfaces schema
+  violations and YAML parse errors as `EXIT_USAGE=2` with a clear
+  message pointing at the offending file, prints a one-line summary
+  of the run (segmentation counts, analysis kind, per-segment
+  distance count + mean for DTW), and supports `--output`/`-o` to
+  override the report path declared in the config (useful for
+  sweeping a single config over multiple input pairs from a shell
+  loop). Example configs land in a follow-up commit.
 - **`neuropose.analyzer.segment.segment_gait_cycles`** and
   **`segment_gait_cycles_bilateral`** — clinical convenience
   wrappers over `segment_predictions` that pre-fill a `joint_axis`
@@ -435,7 +443,9 @@ be split into per-release sections once tagging begins.
   the resulting `poses3d` arrays, and reports throughput speedup
   and max divergence in mm — the missing Apple Silicon numerical
   verification answer from `RESEARCH.md`), and
-  `analyze <results>` (stub). The `segment` subcommand accepts
+  `analyze --config <yaml>` (run the declarative analysis
+  pipeline — see the dedicated entry above for scope). The
+  `segment` subcommand accepts
   joint specifiers as either berkeley_mhad_43 names (`lwri`,
   `rwri`, …) or integer indices, and refuses to overwrite an
   existing segmentation of the same name without `--force`.

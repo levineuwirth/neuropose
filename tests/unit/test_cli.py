@@ -776,17 +776,142 @@ class TestBenchmarkSubcommand:
 
 
 class TestAnalyze:
-    def test_analyze_stub_exits_with_pending_message(
+    """Covers the ``neuropose analyze --config <yaml>`` subcommand.
+
+    Execution happy path is exercised in detail in
+    :mod:`tests.unit.test_analyzer_pipeline` — this file focuses on
+    the CLI wiring: argument parsing, config-loading error modes, and
+    end-to-end smoke.
+    """
+
+    def _make_predictions_file(self, tmp_path: Path, name: str, num_frames: int = 30) -> Path:
+        """Write a trivial VideoPredictions file to disk for the CLI to load."""
+        import math
+
+        from neuropose.io import VideoPredictions, save_video_predictions
+
+        num_joints = 43
+        frames = {}
+        for i in range(num_frames):
+            poses = [[[0.0, 0.0, 0.0] for _ in range(num_joints)]]
+            poses[0][41][1] = float(math.sin(i * 0.3)) * 100.0  # rhee Y
+            frames[f"frame_{i:06d}"] = {
+                "boxes": [[0.0, 0.0, 1.0, 1.0, 0.9]],
+                "poses3d": poses,
+                "poses2d": [[[0.0, 0.0]] * num_joints],
+            }
+        preds = VideoPredictions.model_validate(
+            {
+                "metadata": {
+                    "frame_count": num_frames,
+                    "fps": 30.0,
+                    "width": 640,
+                    "height": 480,
+                },
+                "frames": frames,
+            }
+        )
+        path = tmp_path / name
+        save_video_predictions(path, preds)
+        return path
+
+    def _write_dtw_config(
+        self,
+        tmp_path: Path,
+        *,
+        primary: Path,
+        reference: Path,
+        report: Path,
+    ) -> Path:
+        import yaml as _yaml
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            _yaml.safe_dump(
+                {
+                    "inputs": {"primary": str(primary), "reference": str(reference)},
+                    "analysis": {"kind": "dtw", "method": "dtw_all"},
+                    "output": {"report": str(report)},
+                }
+            )
+        )
+        return config_path
+
+    def test_missing_config_is_usage_error(self, runner: CliRunner, tmp_path: Path) -> None:
+        result = runner.invoke(app, ["analyze", "--config", str(tmp_path / "nope.yaml")])
+        assert result.exit_code == EXIT_USAGE
+        assert "config file not found" in result.output
+
+    def test_missing_config_flag_is_usage_error(self, runner: CliRunner) -> None:
+        result = runner.invoke(app, ["analyze"])
+        assert result.exit_code == EXIT_USAGE
+
+    def test_invalid_yaml_is_usage_error(self, runner: CliRunner, tmp_path: Path) -> None:
+        bad = tmp_path / "bad.yaml"
+        bad.write_text("inputs: {primary: foo\n")  # unclosed flow mapping
+        result = runner.invoke(app, ["analyze", "--config", str(bad)])
+        assert result.exit_code == EXIT_USAGE
+        assert "could not parse YAML" in result.output
+
+    def test_schema_violation_is_usage_error(self, runner: CliRunner, tmp_path: Path) -> None:
+        import yaml as _yaml
+
+        bad = tmp_path / "schema.yaml"
+        bad.write_text(
+            _yaml.safe_dump(
+                {
+                    "inputs": {"primary": str(tmp_path / "a.json")},
+                    # dtw without reference — violates cross-field invariant.
+                    "analysis": {"kind": "dtw", "method": "dtw_all"},
+                    "output": {"report": str(tmp_path / "r.json")},
+                }
+            )
+        )
+        result = runner.invoke(app, ["analyze", "--config", str(bad)])
+        assert result.exit_code == EXIT_USAGE
+        assert "invalid config" in result.output
+
+    def test_happy_path_writes_report(self, runner: CliRunner, tmp_path: Path) -> None:
+        primary = self._make_predictions_file(tmp_path, "a.json")
+        reference = self._make_predictions_file(tmp_path, "b.json")
+        report_path = tmp_path / "report.json"
+        config = self._write_dtw_config(
+            tmp_path, primary=primary, reference=reference, report=report_path
+        )
+        result = runner.invoke(app, ["analyze", "--config", str(config)])
+        assert result.exit_code == EXIT_OK, result.output
+        assert report_path.exists()
+        assert "wrote analysis report" in result.output
+        assert "analysis kind: dtw" in result.output
+
+    def test_output_option_overrides_config_path(self, runner: CliRunner, tmp_path: Path) -> None:
+        primary = self._make_predictions_file(tmp_path, "a.json")
+        reference = self._make_predictions_file(tmp_path, "b.json")
+        # Config points at one report path ...
+        config = self._write_dtw_config(
+            tmp_path,
+            primary=primary,
+            reference=reference,
+            report=tmp_path / "declared.json",
+        )
+        # ... but --output overrides.
+        override = tmp_path / "override.json"
+        result = runner.invoke(app, ["analyze", "--config", str(config), "--output", str(override)])
+        assert result.exit_code == EXIT_OK, result.output
+        assert override.exists()
+        assert not (tmp_path / "declared.json").exists()
+
+    def test_missing_predictions_file_is_usage_error(
         self, runner: CliRunner, tmp_path: Path
     ) -> None:
-        results_path = tmp_path / "results.json"
-        results_path.write_text("{}")
-        result = runner.invoke(app, ["analyze", str(results_path)])
-        assert result.exit_code == EXIT_PENDING
-        assert "commit 10" in result.output
-
-    def test_analyze_requires_an_argument(self, runner: CliRunner) -> None:
-        result = runner.invoke(app, ["analyze"])
+        # Config points at a primary that does not exist.
+        config = self._write_dtw_config(
+            tmp_path,
+            primary=tmp_path / "missing_primary.json",
+            reference=tmp_path / "missing_reference.json",
+            report=tmp_path / "report.json",
+        )
+        result = runner.invoke(app, ["analyze", "--config", str(config)])
         assert result.exit_code == EXIT_USAGE
 
 

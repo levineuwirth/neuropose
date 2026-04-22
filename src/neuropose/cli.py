@@ -25,8 +25,11 @@ Eight subcommands:
   vs CPU numerical-divergence checks. Prints a human report to stdout
   and (optionally) writes a structured :class:`~neuropose.io.BenchmarkResult`
   JSON to ``--output``.
-- ``neuropose analyze <results>`` — stubbed placeholder pending the
-  analyzer rewrite in commit 10.
+- ``neuropose analyze --config <yaml>`` — run the declarative analysis
+  pipeline described in a YAML config. Loads the named predictions
+  files, applies segmentation + analysis, writes an
+  :class:`~neuropose.analyzer.pipeline.AnalysisReport` JSON. See
+  ``examples/analysis/*.yaml`` for runnable references.
 
 User-facing error handling
 --------------------------
@@ -57,6 +60,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+import yaml
 from pydantic import ValidationError
 
 from neuropose import __version__
@@ -1196,26 +1200,94 @@ def benchmark(
 
 
 # ---------------------------------------------------------------------------
-# analyze (stub)
+# analyze
 # ---------------------------------------------------------------------------
 
 
 @app.command()
 def analyze(
     ctx: typer.Context,
-    results: Annotated[
+    config: Annotated[
         Path,
-        typer.Argument(help="Path to a results.json produced by watch or process."),
+        typer.Option(
+            "--config",
+            "-c",
+            help=(
+                "Path to a YAML AnalysisConfig file. See examples/analysis/ "
+                "for runnable references."
+            ),
+        ),
     ],
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            "-o",
+            help=(
+                "Override the report path declared in the config's "
+                "output.report field. Useful when running the same config "
+                "against multiple input pairs from a shell loop."
+            ),
+        ),
+    ] = None,
 ) -> None:
-    """Run the analyzer subpackage against a results.json (pending commit 10)."""
-    del ctx, results
-    typer.echo(
-        "error: the analyzer subpackage is pending commit 10. "
-        "Until it lands, use neuropose.io to load results.json from Python.",
-        err=True,
-    )
-    raise typer.Exit(code=EXIT_PENDING)
+    """Run the declarative analysis pipeline described by a YAML config.
+
+    Loads the config, parses it through
+    :class:`~neuropose.analyzer.pipeline.AnalysisConfig` (so typos fail
+    immediately with a clear error), executes the pipeline via
+    :func:`~neuropose.analyzer.pipeline.run_analysis`, and writes the
+    resulting :class:`~neuropose.analyzer.pipeline.AnalysisReport` to
+    ``--output`` (or to ``output.report`` declared in the config).
+
+    Cross-field invariants (for example,
+    ``method='dtw_relation'`` requires ``joint_i`` / ``joint_j``) are
+    enforced at parse time, so a typo fails before any predictions
+    are loaded.
+    """
+    del ctx
+    # Deferred import keeps the CLI module's top-level imports free of
+    # pipeline dependencies so ``watch`` / ``process`` startup stays
+    # cheap.
+    from neuropose.analyzer.pipeline import load_config, run_analysis, save_report
+
+    if not config.exists():
+        typer.echo(f"error: config file not found: {config}", err=True)
+        raise typer.Exit(code=EXIT_USAGE)
+
+    try:
+        analysis_config = load_config(config)
+    except ValidationError as exc:
+        typer.echo(f"error: invalid config {config}:\n{exc}", err=True)
+        raise typer.Exit(code=EXIT_USAGE) from exc
+    except yaml.YAMLError as exc:
+        typer.echo(f"error: could not parse YAML {config}: {exc}", err=True)
+        raise typer.Exit(code=EXIT_USAGE) from exc
+
+    report_path = output if output is not None else analysis_config.output.report
+
+    try:
+        report = run_analysis(analysis_config)
+    except (FileNotFoundError, ValueError) as exc:
+        typer.echo(f"error: analysis failed: {exc}", err=True)
+        raise typer.Exit(code=EXIT_USAGE) from exc
+
+    save_report(report_path, report)
+
+    typer.echo(f"wrote analysis report to {report_path}")
+    if report.segmentations:
+        seg_summary = ", ".join(
+            f"{name}={len(seg.segments)}" for name, seg in report.segmentations.items()
+        )
+        typer.echo(f"segmentations: {seg_summary}")
+    # Emit a one-line summary of the results regardless of kind.
+    typer.echo(f"analysis kind: {report.results.kind}")
+    if report.results.kind == "dtw":
+        n = len(report.results.distances)
+        mean = report.results.summary.get("mean", float("nan"))
+        typer.echo(f"distances computed: {n} (mean={mean:.4f})")
+    elif report.results.kind == "stats":
+        typer.echo(f"statistic blocks computed: {len(report.results.statistics)}")
 
 
 def run() -> None:
