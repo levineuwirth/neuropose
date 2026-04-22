@@ -279,8 +279,21 @@ be split into per-release sections once tagging begins.
   `CURRENT_VERSION = 2`, with a new
   `register_analysis_report_migration` decorator and
   `migrate_analysis_report` driver in `neuropose.migrations` ready
-  for future schema changes. Pipeline execution lands in a
-  follow-up commit.
+  for future schema changes. `run_analysis(config)` loads the named
+  predictions files, applies the configured segmentation, dispatches
+  to the selected analysis kind (DTW, stats, or none), and emits a
+  fully populated `AnalysisReport` whose `Provenance` inherits the
+  inference-time envelope from the primary input with
+  `analysis_config` stamped in, so the report is self-describing
+  even if the source YAML is lost. For DTW runs with segmentation,
+  segments are paired one-to-one by index across primary and
+  reference, truncating to `min(len_primary, len_reference)`;
+  bilateral segmentations emit per-side distances under
+  `"left_heel_strikes[i]"` / `"right_heel_strikes[i]"` labels.
+  `load_config(path)` parses YAML, `save_report(path, report)`
+  writes atomically, and `load_report(path)` rehydrates via the
+  migration chain. CLI wiring and example configs land in
+  follow-up commits.
 - **`neuropose.analyzer.segment.segment_gait_cycles`** and
   **`segment_gait_cycles_bilateral`** — clinical convenience
   wrappers over `segment_predictions` that pre-fill a `joint_axis`
