@@ -257,6 +257,30 @@ be split into per-release sections once tagging begins.
   two-joint displacement DTW; users who prefer a unified API can
   express the same computation via `dtw_all` with an appropriate
   pair of angle triplets or run `dtw_relation` directly.
+- **`neuropose.analyzer.pipeline`** (schemas) — declarative
+  analysis-pipeline configuration and output artifact, parseable from
+  YAML or JSON via pydantic. `AnalysisConfig` captures a full
+  experiment: inputs (primary + optional reference predictions
+  files), preprocessing (person index, with room to grow),
+  optional segmentation (`gait_cycles` / `gait_cycles_bilateral` /
+  `extractor` discriminated union), and a required analysis stage
+  (`dtw` / `stats` / `none` discriminated union). `AnalysisReport`
+  is the runtime output: carries the originating config, a
+  `Provenance` envelope with `analysis_config` populated, per-input
+  summaries, produced segmentations, and an analysis-result payload
+  that mirrors the stage choice (`DtwResults`, `StatsResults`, or
+  `NoResults`). Cross-field invariants — `method="dtw_relation"`
+  requires `joint_i`/`joint_j`, `representation="angles"` requires
+  non-empty `angle_triplets`, `analysis.kind="dtw"` requires
+  `inputs.reference`, `analysis.kind="stats"` refuses a reference —
+  are enforced at parse time via `model_validator` so typos fail in
+  milliseconds instead of after a multi-minute predictions load.
+  `AnalysisReport` carries a `schema_version` field defaulting to
+  `CURRENT_VERSION = 2`, with a new
+  `register_analysis_report_migration` decorator and
+  `migrate_analysis_report` driver in `neuropose.migrations` ready
+  for future schema changes. Pipeline execution lands in a
+  follow-up commit.
 - **`neuropose.analyzer.segment.segment_gait_cycles`** and
   **`segment_gait_cycles_bilateral`** — clinical convenience
   wrappers over `segment_predictions` that pre-fill a `joint_axis`

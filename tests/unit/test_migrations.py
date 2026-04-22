@@ -38,6 +38,7 @@ from neuropose.migrations import (
     FutureSchemaError,
     MigrationError,
     MigrationNotFoundError,
+    migrate_analysis_report,
     migrate_benchmark_result,
     migrate_job_results,
     migrate_video_predictions,
@@ -283,7 +284,31 @@ class TestMigrateJobResults:
 
 
 # ---------------------------------------------------------------------------
+# migrate_analysis_report
+# ---------------------------------------------------------------------------
+
+
+class TestMigrateAnalysisReport:
+    def test_current_version_is_noop(self) -> None:
+        """A payload already at CURRENT_VERSION passes through unchanged."""
+        payload = {"schema_version": CURRENT_VERSION, "foo": "bar"}
+        assert migrate_analysis_report(payload) == payload
+
+    def test_missing_version_defaults_to_v1_and_fails(self) -> None:
+        """AnalysisReport first shipped at CURRENT_VERSION, so a payload
+        without schema_version (defaulting to 1) would require a
+        non-existent v1→v2 migration and fail with a clear error."""
+        with pytest.raises(MigrationNotFoundError, match="AnalysisReport"):
+            migrate_analysis_report({})
+
+    def test_future_version_rejected(self) -> None:
+        with pytest.raises(FutureSchemaError, match="AnalysisReport"):
+            migrate_analysis_report({"schema_version": CURRENT_VERSION + 5})
+
+
+# ---------------------------------------------------------------------------
 # register_video_predictions_migration / register_benchmark_result_migration
+#   / register_analysis_report_migration
 # ---------------------------------------------------------------------------
 
 
@@ -311,6 +336,21 @@ class TestRegistration:
 
         assert _fn.__name__ == "_fn"
         assert _fn({"x": 1}) == {"x": 1}
+
+    def test_analysis_report_duplicate_registration_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(migrations, "_ANALYSIS_REPORT_MIGRATIONS", {})
+
+        @migrations.register_analysis_report_migration(from_version=2)
+        def _first(p: dict) -> dict:
+            return p
+
+        with pytest.raises(RuntimeError, match="already registered"):
+
+            @migrations.register_analysis_report_migration(from_version=2)
+            def _second(p: dict) -> dict:
+                return p
 
 
 # ---------------------------------------------------------------------------

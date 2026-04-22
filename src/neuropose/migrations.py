@@ -60,7 +60,9 @@ Version history
 ---------------
 - **v1:** initial schema, pre-Phase-0.
 - **v2:** added optional ``provenance`` field to :class:`~neuropose.io.VideoPredictions`
-  and :class:`~neuropose.io.BenchmarkResult` (Phase 0, Paper C reproducibility envelope)."""
+  and :class:`~neuropose.io.BenchmarkResult` (Phase 0, Paper C reproducibility envelope).
+  :class:`~neuropose.analyzer.pipeline.AnalysisReport` also enters the registry at v2
+  (no legacy v1 payloads ever existed for it, so no migration is registered)."""
 
 
 class MigrationError(Exception):
@@ -90,6 +92,7 @@ class MigrationNotFoundError(MigrationError):
 # dict at ``source + 1``.
 _VIDEO_PREDICTIONS_MIGRATIONS: dict[int, Callable[[dict], dict]] = {}
 _BENCHMARK_RESULT_MIGRATIONS: dict[int, Callable[[dict], dict]] = {}
+_ANALYSIS_REPORT_MIGRATIONS: dict[int, Callable[[dict], dict]] = {}
 
 
 def register_video_predictions_migration(
@@ -142,6 +145,29 @@ def register_benchmark_result_migration(
     return wrap
 
 
+def register_analysis_report_migration(
+    from_version: int,
+) -> Callable[[Callable[[dict], dict]], Callable[[dict], dict]]:
+    """Register a :class:`~neuropose.analyzer.pipeline.AnalysisReport` migration.
+
+    See :func:`register_video_predictions_migration` for usage — this
+    is the same pattern for the analysis-report registry. Unlike the
+    other two schemas, :class:`AnalysisReport` first appeared at
+    :data:`CURRENT_VERSION = 2`, so no ``from_version=1`` migration
+    exists (and none is expected).
+    """
+
+    def wrap(fn: Callable[[dict], dict]) -> Callable[[dict], dict]:
+        if from_version in _ANALYSIS_REPORT_MIGRATIONS:
+            raise RuntimeError(
+                f"analysis-report migration already registered from version {from_version}"
+            )
+        _ANALYSIS_REPORT_MIGRATIONS[from_version] = fn
+        return fn
+
+    return wrap
+
+
 def migrate_video_predictions(payload: dict) -> dict:
     """Migrate a raw :class:`~neuropose.io.VideoPredictions` dict to current.
 
@@ -177,6 +203,18 @@ def migrate_benchmark_result(payload: dict) -> dict:
     sibling function for benchmark-result payloads.
     """
     return _migrate(payload, _BENCHMARK_RESULT_MIGRATIONS, schema_name="BenchmarkResult")
+
+
+def migrate_analysis_report(payload: dict) -> dict:
+    """Migrate a raw :class:`~neuropose.analyzer.pipeline.AnalysisReport` dict.
+
+    See :func:`migrate_video_predictions` for semantics. Because
+    :class:`AnalysisReport` first shipped at schema_version 2, a
+    payload missing the key still defaults to 1 (and would require a
+    not-yet-registered v1 → v2 migration); this is only reachable for
+    deliberately malformed inputs.
+    """
+    return _migrate(payload, _ANALYSIS_REPORT_MIGRATIONS, schema_name="AnalysisReport")
 
 
 def migrate_job_results(payload: dict) -> dict:
