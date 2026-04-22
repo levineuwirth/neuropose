@@ -301,7 +301,16 @@ be split into per-release sections once tagging begins.
   distance count + mean for DTW), and supports `--output`/`-o` to
   override the report path declared in the config (useful for
   sweeping a single config over multiple input pairs from a shell
-  loop). Example configs land in a follow-up commit.
+  loop). Ships three example configs under `examples/analysis/`:
+  `minimal.yaml` (smallest working DTW pipeline), `paper_c_headline.yaml`
+  (representative Paper C config with bilateral gait-cycle
+  segmentation, per-sequence Procrustes, and joint-angle DTW on
+  knee/hip triplets), and `per_joint_debug.yaml` (per-joint DTW
+  breakdown for diagnosing which joint drives an unexpected
+  distance). An integration suite exercises each example against
+  synthetic predictions so schema drift between the YAMLs and the
+  executor fails CI, not silently at run time. Documented in
+  `docs/api/pipeline.md`.
 - **`neuropose.analyzer.segment.segment_gait_cycles`** and
   **`segment_gait_cycles_bilateral`** — clinical convenience
   wrappers over `segment_predictions` that pre-fill a `joint_axis`

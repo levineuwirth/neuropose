@@ -1,0 +1,48 @@
+# Paper C headline config: cycle-segmented joint-angle DTW with
+# per-sequence Procrustes alignment. This is the representative
+# Paper C pipeline — bilateral gait cycles drive the segmentation
+# so distances are reported per-stride per-side, and the angle-space
+# representation makes the distance clinically interpretable
+# (knee flexion angle, hip extension angle, etc.).
+#
+# Joint-triplet indices below target the berkeley_mhad_43 skeleton:
+#   - (27, 31, 32): left hip → left knee → left ankle (left knee flex)
+#   - (35, 39, 40): right hip → right knee → right ankle (right knee flex)
+#   - (34, 27, 31): back hip ← left hip → left knee (left hip flex)
+#   - (34, 35, 39): back hip ← right hip → right knee (right hip flex)
+#
+# See neuropose.analyzer.JOINT_NAMES for the full 43-joint table.
+#
+# Run:
+#   neuropose analyze --config examples/analysis/paper_c_headline.yaml \
+#       --output out/paper_c_report.json
+
+config_version: 1
+
+inputs:
+  primary: data/subject_trial.json
+  reference: data/mocap_reference.json
+
+preprocessing:
+  person_index: 0
+
+segmentation:
+  kind: gait_cycles_bilateral
+  axis: y
+  invert: false
+  min_cycle_seconds: 0.4
+
+analysis:
+  kind: dtw
+  method: dtw_all
+  align: procrustes_per_sequence
+  representation: angles
+  angle_triplets:
+    - [27, 31, 32]   # left knee flexion
+    - [35, 39, 40]   # right knee flexion
+    - [34, 27, 31]   # left hip flexion
+    - [34, 35, 39]   # right hip flexion
+  nan_policy: interpolate
+
+output:
+  report: out/paper_c_report.json

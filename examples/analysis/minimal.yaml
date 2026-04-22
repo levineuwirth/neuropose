@@ -1,0 +1,26 @@
+# Minimal DTW config: full-trial comparison on raw 3D coordinates,
+# no Procrustes alignment, no segmentation. The simplest working
+# example; use this as a starting template and add stages as needed.
+#
+# Run:
+#   neuropose analyze --config examples/analysis/minimal.yaml \
+#       --output out/minimal_report.json
+#
+# (Substitute real paths for `inputs.primary` and `inputs.reference`
+#  before running.)
+
+config_version: 1
+
+inputs:
+  primary: data/trial_a.json
+  reference: data/trial_b.json
+
+analysis:
+  kind: dtw
+  method: dtw_all
+  align: none
+  representation: coords
+  nan_policy: propagate
+
+output:
+  report: out/minimal_report.json

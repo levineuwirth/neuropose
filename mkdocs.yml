@@ -100,6 +100,7 @@ nav:
       - neuropose.migrations: api/migrations.md
       - neuropose.benchmark: api/benchmark.md
       - neuropose.analyzer.segment: api/segment.md
+      - neuropose.analyzer.pipeline: api/pipeline.md
       - neuropose.visualize: api/visualize.md
   - Development: development.md
   - Deployment: deployment.md

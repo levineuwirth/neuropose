@@ -1,0 +1,36 @@
+# Per-joint debug config: runs dtw_per_joint on raw coordinates so
+# the resulting report carries a full (segments × joints) distance
+# breakdown. Useful when one joint is suspected of driving an
+# otherwise-unexpected DTW distance — the per-joint numbers make it
+# obvious which joint's trajectory diverges most.
+#
+# Raw coordinates (representation: coords) are used rather than
+# angles because joint-level debugging is most interpretable in the
+# native measurement space. Procrustes alignment is on so
+# translation and rotation between trials do not inflate the numbers.
+#
+# Run:
+#   neuropose analyze --config examples/analysis/per_joint_debug.yaml \
+#       --output out/per_joint_report.json
+
+config_version: 1
+
+inputs:
+  primary: data/trial_a.json
+  reference: data/trial_b.json
+
+segmentation:
+  kind: gait_cycles
+  joint: rhee
+  axis: y
+  min_cycle_seconds: 0.4
+
+analysis:
+  kind: dtw
+  method: dtw_per_joint
+  align: procrustes_per_sequence
+  representation: coords
+  nan_policy: propagate
+
+output:
+  report: out/per_joint_report.json
