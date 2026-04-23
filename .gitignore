@@ -70,6 +70,16 @@ Thumbs.db
 # --- Docs site build -------------------------------------------------------
 site/
 
+# --- Ideation / lab-notebook docs ------------------------------------------
+# Living R&D notes and engineering roadmaps. Kept locally so they can
+# evolve freely with in-progress thinking, pre-meeting drafts, and
+# speculative directions that don't belong in the public repo. Anything
+# under docs/research/ is treated the same way — personal / lab-internal
+# working artifacts, not published docs.
+/RESEARCH.md
+/TECHNICAL.md
+/docs/research/
+
 # --- Data and model weights (policy-enforced) ------------------------------
 # Runtime job directories, subject data, and downloaded model caches must
 # never be committed. The default runtime location is under $XDG_DATA_HOME
