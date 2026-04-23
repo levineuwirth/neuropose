@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "neuropose"
 version = "0.1.0.dev0"
 description = "3D human pose estimation pipeline for clinical movement research, built on MeTRAbs."
-readme = "README.md"
+readme = "PYPI_README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11,<3.12"
 authors = [
